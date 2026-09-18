@@ -6,7 +6,7 @@
   "main": "src/main/app.js",
   "scripts": {
     "start": "electron .",
-    "pack": "electron-packager . MDReader --platform=win32 --arch=x64 --icon=assets/icons/mdreader.ico --no-asar --no-prune --overwrite --out=dist"
+    "pack": "electron-packager . MDReader --platform=win32 --arch=x64 --icon=assets/icons/mdreader.ico --no-asar --overwrite --out=dist --ignore=\"^/dist\" --ignore=\"^/\\.git\" --ignore=\"^/\\.workbuddy\" --ignore=\"^/node_modules\""
   },
   "devDependencies": {
     "electron": "22.3.27",
