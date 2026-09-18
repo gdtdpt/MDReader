@@ -422,6 +422,32 @@
   }
 
   function openDocument(payload) {
+    /* 打点（M4 定位双击延迟）：syncMs = 解析+净化+mermaid 占位的同步耗时，
+     * paintMs = 双 rAF 后的实际绘制完成（含布局/绘制）。
+     * 与主进程 launcher / resident-resume 行靠墙上时钟串联。 */
+    const t0 = performance.now();
+    const reportOpen = (reused) => {
+      const syncMs = Math.round(performance.now() - t0);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          try {
+            window.api.sendPhasePerf({
+              phase: "open",
+              at: new Date().toISOString(),
+              syncMs,
+              paintMs: Math.round(performance.now() - t0),
+              contentKB: Math.round((payload.content || "").length / 1024),
+              tabs: tabs.length,
+              reused: !!reused,
+              vendor: deferredState || "idle",
+            });
+          } catch (_) {
+            /* 上报失败不影响功能 */
+          }
+        })
+      );
+    };
+
     addRecent(payload.path); // 所有打开入口统一记最近文件
     const key = String(payload.path).toLowerCase();
     const existing = tabs.find((t) => t.path.toLowerCase() === key);
@@ -437,6 +463,7 @@
       }
       activateTab(existing.id);
       scheduleSessionSave();
+      reportOpen(true);
       return;
     }
 
@@ -457,6 +484,7 @@
     activateTab(tab.id);
     updateEmptyState();
     scheduleSessionSave();
+    reportOpen(false);
     reportStartupPerf();
   }
 
@@ -1406,6 +1434,7 @@
   function loadDeferredVendor() {
     if (deferredState) return;
     deferredState = "loading";
+    const tStart = performance.now();
     let pending = DEFERRED_VENDOR.length;
     const settle = () => {
       if (--pending > 0) return;
@@ -1416,6 +1445,17 @@
       const active = getActiveTab();
       if (active) activateTab(active.id); // 恢复滚动 + 刷新大纲
       deferredState = "done";
+      // 懒加载库就位后会有一次全量重渲染：这之后内容才算最终形态（含公式/高亮）
+      try {
+        window.api.sendPhasePerf({
+          phase: "deferred",
+          at: new Date().toISOString(),
+          loadMs: Math.round(performance.now() - tStart),
+          tabs: tabs.length,
+        });
+      } catch (_) {
+        /* 上报失败不影响功能 */
+      }
     };
     for (const src of DEFERRED_VENDOR) {
       const s = document.createElement("script");
