@@ -13,6 +13,7 @@ const {
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const net = require("net");
 const fsp = fs.promises;
 
 const MD_EXTENSIONS = ["md", "markdown", "mdown", "mkdn", "txt"];
@@ -127,6 +128,8 @@ function readPrefs() {
   prefsCache = {
     closeAction: CLOSE_ACTIONS.includes(data.closeAction) ? data.closeAction : "ask",
     trayTipShown: !!data.trayTipShown,
+    // 快速启动器（M4-2）：默认开；产物不在位时 openerCommandExe() 会自动退回应用自身
+    fastLauncher: data.fastLauncher !== false,
   };
   return prefsCache;
 }
@@ -314,14 +317,17 @@ async function openFileDialog() {
 async function openViaDialogAndPush() {
   const filePath = await openFileDialog();
   if (!filePath) return;
+  await openFileFromPath(filePath);
+}
+
+/* 按路径打开（对话框 / 命令行 / 文件关联 / 原生启动器管道共用同一个出口） */
+async function openFileFromPath(filePath) {
   const file = await readMarkdownFile(filePath);
   if (file.ok) {
     pushOpenFile(file);
-  } else {
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
     // 应用内错误提示条（渲染层 showError），不再弹原生 showErrorBox
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("app:open-error", file.error);
-    }
+    mainWindow.webContents.send("app:open-error", file.error);
   }
 }
 
@@ -397,6 +403,10 @@ async function checkDefaultOpener() {
 
 async function applyDefaultOpener() {
   const exePath = process.execPath; // 打包后即 MDReader.exe，开发期为 electron.exe
+  // 命令指向谁由「快速启动器」偏好决定：开启且启动器在位 → 指向 ~15KB 的启动器
+  // （双击时被创建的映像小一个数量级），否则退回应用自身（旧行为）
+  const cmdExe = openerCommandExe();
+  const viaLauncher = cmdExe !== exePath;
   try {
     await regAdd([
       "HKCU\\Software\\Classes\\" + OPENER_PROG_ID,
@@ -416,16 +426,109 @@ async function applyDefaultOpener() {
       "HKCU\\Software\\Classes\\" + OPENER_PROG_ID + "\\shell\\open\\command",
       "/ve",
       "/d",
-      '"' + exePath + '" "%1"',
+      '"' + cmdExe + '" "%1"',
       "/f",
     ]);
     for (const ext of OPENER_EXTENSIONS) {
       await regAdd(["HKCU\\Software\\Classes\\" + ext, "/ve", "/d", OPENER_PROG_ID, "/f"]);
     }
-    return { ok: true, message: "已将 .md / .markdown 关联到 MDReader" };
+    return {
+      ok: true,
+      message: viaLauncher
+        ? "已将 .md / .markdown 关联到 MDReader（快速启动器）"
+        : "已将 .md / .markdown 关联到 MDReader",
+    };
   } catch (err) {
     return { ok: false, message: "注册失败：" + err.message };
   }
+}
+
+/* ---------- 快速启动器（M4-2，Heinrich 确认方案） ----------
+ * 目标机实测：双击时被创建的那个进程，其「进程创建前的外部开销」（企业 EDR 同步扫描
+ * 映像）与映像体积正相关 —— MDReader.exe 150.3MB ≈ 3s，200KB 的对照 exe ≈ 1.5s。
+ * 托盘常驻已把进程内耗时压到 ~0.7s，剩下的大头就是这一笔映像开销。
+ *
+ * 对策：把 .md 关联指向 native/launcher/launcher.c 编出来的 ~15KB 原生启动器。
+ * 它只做一件事 —— 把文件路径经命名管道交给常驻实例后立刻退出；连不上（未常驻）
+ * 就退回「直接拉起 MDReader.exe」，行为与旧版一致。
+ * 服务端用 Node 内置 net，零新增依赖；关闭该偏好即整体回退到旧路径。
+ */
+const LAUNCHER_NAME = "MDReaderLauncher.exe";
+const PIPE_NAME = "\\\\.\\pipe\\mdreader";
+let pipeServer = null;
+
+function launcherPath() {
+  // 与 MDReader.exe 同目录（打包时由 tools/postpack.js 放到产物根目录）
+  return path.join(path.dirname(process.execPath), LAUNCHER_NAME);
+}
+
+function launcherAvailable() {
+  try {
+    return fs.statSync(launcherPath()).isFile();
+  } catch (_) {
+    return false; // 开发期 / 未打包时不存在
+  }
+}
+
+/* 关联命令该指向谁 */
+function openerCommandExe() {
+  if (readPrefs().fastLauncher !== false && launcherAvailable()) {
+    return launcherPath();
+  }
+  return process.execPath;
+}
+
+/* 启动器消息：`<procBootMs>\n<文件路径>`（UTF-16LE；路径可空 = 只唤出窗口）。
+ * procBootMs 由启动器自己用 GetProcessTimes 量，宿主日志里直接可见「这次双击付了
+ * 多少映像创建开销」—— 这正是之前任何打点都测不到的那一段。 */
+function handleLauncherMessage(buf) {
+  const text = buf.toString("utf16le").replace(/\u0000+$/, "");
+  const nl = text.indexOf("\n");
+  const bootRaw = nl >= 0 ? text.slice(0, nl) : text;
+  const fileRaw = nl >= 0 ? text.slice(nl + 1) : "";
+  const procBootMs = parseInt(bootRaw, 10);
+  const at = Date.now();
+  const wasVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  showWindow();
+  appendLogLine({
+    mode: "native-launcher",
+    at: new Date(at).toISOString(),
+    wallMs: at,
+    procBootMs: Number.isFinite(procBootMs) ? procBootMs : null,
+    showMs: Date.now() - at,
+    wasVisible,
+    file: fileRaw || null,
+  });
+  if (fileRaw) openFileFromPath(fileRaw);
+}
+
+function startPipeServer() {
+  if (pipeServer) return;
+  pipeServer = net.createServer((socket) => {
+    const chunks = [];
+    socket.on("data", (d) => chunks.push(d));
+    socket.on("error", () => {});
+    socket.on("end", () => handleLauncherMessage(Buffer.concat(chunks)));
+  });
+  pipeServer.on("error", (err) => {
+    // 监听失败不致命：启动器连不上会自行退回冷启动，只是没享受到加速
+    appendLogLine({ mode: "pipe-error", at: new Date().toISOString(), error: err.message });
+  });
+  pipeServer.listen(PIPE_NAME);
+}
+
+/* 切换快速启动器：写偏好；若 .md 关联已经在我们手上，顺手改写命令路径
+ * （否则用户还得再点一次「设为默认打开方式」才生效） */
+async function toggleFastLauncher(enabled) {
+  const value = writePrefs({ fastLauncher: !!enabled }).fastLauncher;
+  let reApplied = false;
+  const cmd = await regQueryDefault(
+    "HKCU\\Software\\Classes\\" + OPENER_PROG_ID + "\\shell\\open\\command"
+  );
+  if (cmd && cmd.toLowerCase().indexOf(path.dirname(process.execPath).toLowerCase()) >= 0) {
+    reApplied = !!(await applyDefaultOpener()).ok;
+  }
+  return { fastLauncher: value, available: launcherAvailable(), reApplied };
 }
 
 /* ---------- 文件 stat（外部修改检测用） ---------- */
@@ -635,6 +738,13 @@ function registerIpc() {
   ipcMain.handle("prefs:get-close-action", () => readPrefs().closeAction);
   ipcMain.handle("prefs:set-close-action", (_event, action) => setCloseAction(action));
 
+  // 快速启动器偏好（··· 菜单切换；available 为 false 时渲染层不展示该项）
+  ipcMain.handle("prefs:get-fast-launcher", () => ({
+    fastLauncher: readPrefs().fastLauncher !== false,
+    available: launcherAvailable(),
+  }));
+  ipcMain.handle("prefs:set-fast-launcher", (_event, enabled) => toggleFastLauncher(enabled));
+
   // 渲染层自绘关窗询问的应答；原生兜底框已接管或已处理时（closeDialogOpen=false）忽略
   ipcMain.on("app:close-decision", (_event, payload) => {
     if (!closeDialogOpen) return;
@@ -700,6 +810,7 @@ app.whenReady().then(() => {
   perfMark("appReady");
   registerIpc();
   buildMenu();
+  startPipeServer(); // 快速启动器的落点：窗口还没建就先听着，避免早到的双击落空
   createWindow();
   perfMark("windowCreated");
 

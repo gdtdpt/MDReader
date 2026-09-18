@@ -158,6 +158,25 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
+   * 查询快速启动器状态（M4-2）。
+   * @returns {Promise<{fastLauncher: boolean, available: boolean}>}
+   *   available 为 false 表示启动器产物不在位（开发期 / 未打包），菜单项应隐藏
+   */
+  getFastLauncher() {
+    return ipcRenderer.invoke("prefs:get-fast-launcher");
+  },
+
+  /**
+   * 开关快速启动器（把 .md 关联指向 ~15KB 的原生启动器，双击时免于创建 150MB 映像）。
+   * @param {boolean} enabled
+   * @returns {Promise<{fastLauncher: boolean, available: boolean, reApplied: boolean}>}
+   *   reApplied 为 true 表示关联已被主进程顺手改写
+   */
+  setFastLauncher(enabled) {
+    return ipcRenderer.invoke("prefs:set-fast-launcher", enabled);
+  },
+
+  /**
    * 订阅关闭行为变更（关窗询问勾选「记住」时推送）。
    * @param {("ask"|"tray"|"quit") => void} callback
    */

@@ -30,6 +30,7 @@
   const closeAskEl = document.getElementById("close-ask");
   const closeTrayEl = document.getElementById("close-tray");
   const closeQuitEl = document.getElementById("close-quit");
+  const fastLauncherEl = document.getElementById("menu-fast-launcher");
   const modifiedBanner = document.getElementById("modified-banner");
   const modifiedText = document.getElementById("modified-text");
   const modifiedReload = document.getElementById("modified-reload");
@@ -776,6 +777,42 @@
     });
   }
 
+  /* ---------- 快速启动器（M4-2）
+   * 把 .md 关联指向 ~15KB 的原生启动器：双击时不再创建 150MB 的 MDReader.exe，
+   * 而是由小进程把文件路径经命名管道交给常驻实例（目标机实测外部开销与映像体积
+   * 正相关：150MB ≈ 3s，200KB ≈ 1.5s）。产物不在位（开发期）时整项隐藏。
+   */
+  let fastLauncher = { on: false, available: false };
+
+  window.api.getFastLauncher().then((v) => {
+    if (!v) return;
+    fastLauncher = { on: !!v.fastLauncher, available: !!v.available };
+    fastLauncherEl.hidden = !fastLauncher.available;
+  });
+
+  function renderFastLauncherItem() {
+    fastLauncherEl.hidden = !fastLauncher.available;
+    fastLauncherEl.querySelector(".menu-check").textContent = fastLauncher.on ? "✓" : "";
+  }
+
+  fastLauncherEl.addEventListener("click", async () => {
+    hideMoreMenu();
+    const res = await window.api.setFastLauncher(!fastLauncher.on);
+    fastLauncher = { on: !!res.fastLauncher, available: !!res.available };
+    if (!fastLauncher.available) {
+      showNotice("未找到 MDReaderLauncher.exe（仅打包版可用）", false);
+      return;
+    }
+    if (fastLauncher.on) {
+      showNotice(
+        res.reApplied ? "已启用快速启动器，.md 关联已更新" : "已启用快速启动器（下次设默认打开方式时生效）",
+        true
+      );
+    } else {
+      showNotice(res.reApplied ? "已停用快速启动器，.md 关联已还原" : "已停用快速启动器", true);
+    }
+  });
+
   /* ---------- 应用内模态对话框（M4，替代原生 showMessageBox） ----------
    * Promise 风格：appConfirm({title, message, detail, buttons, checkboxLabel})
    * → { index, checked }；Esc / 点击遮罩 = index -1（取消）。
@@ -903,6 +940,7 @@
   function showMoreMenu() {
     renderMoreMenu();
     renderCloseActionItems();
+    renderFastLauncherItem();
     moreMenu.hidden = false; // 先显示才有几何信息可量，同帧定位不闪烁
     // 菜单左缘对齐按钮左缘、贴按钮下方 4px；越出视口右缘时右移收进来
     const rect = tbMore.getBoundingClientRect();
