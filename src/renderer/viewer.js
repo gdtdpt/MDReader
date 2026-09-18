@@ -31,6 +31,13 @@
   const modifiedText = document.getElementById("modified-text");
   const modifiedReload = document.getElementById("modified-reload");
   const modifiedIgnore = document.getElementById("modified-ignore");
+  const findBar = document.getElementById("find-bar");
+  const findInput = document.getElementById("find-input");
+  const findCount = document.getElementById("find-count");
+  const findPrevBtn = document.getElementById("find-prev");
+  const findNextBtn = document.getElementById("find-next");
+  const findCaseBtn = document.getElementById("find-case");
+  const findCloseBtn = document.getElementById("find-close");
 
   const MAX_DOM_TABS = 10;
 
@@ -394,6 +401,7 @@
     updateTabbar();
     renderOutline(); // 侧栏联动活动 tab
     hideModifiedBanner(); // 提示条属于上一个 tab 的上下文
+    closeFind(); // 查找状态不跨 tab 保留（M3-5 设计共识）
     checkExternalChange(target);
     scheduleSessionSave();
   }
@@ -878,6 +886,153 @@
     if (tab) checkExternalChange(tab);
   });
 
+  /* ---------- 文档内查找（M3-5） ----------
+   * CSS Custom Highlight API 高亮：Range 集合直接上色，
+   * 不改 DOM、不与 mermaid/KaTeX 的结构冲突。
+   * 快捷键（vim 方案，Heinrich 确认）：Ctrl+N 下一个 / Ctrl+P 上一个 / Esc 关闭。
+   */
+
+  const highlightSupported =
+    typeof window.Highlight === "function" && !!(window.CSS && CSS.highlights);
+  let findMatches = []; // Range[]
+  let findCurrent = -1;
+  let findCaseSensitive = false;
+  let findDebounce = null;
+
+  function getFindRoot() {
+    const tab = getActiveTab();
+    return tab && tab.pane ? tab.pane : null;
+  }
+
+  /* 单文本节点内匹配（跨节点如 **粗体** 截断处 v1 不覆盖，跳过） */
+  function collectFindRanges(root, query, caseSensitive) {
+    const ranges = [];
+    if (!query) return ranges;
+    const needle = caseSensitive ? query : query.toLowerCase();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const name = node.parentNode ? node.parentNode.nodeName : "";
+        if (name === "SCRIPT" || name === "STYLE") return NodeFilter.FILTER_REJECT;
+        return node.nodeValue && node.nodeValue.trim()
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      },
+    });
+    let node;
+    while ((node = walker.nextNode())) {
+      const hay = caseSensitive ? node.nodeValue : node.nodeValue.toLowerCase();
+      let i = hay.indexOf(needle);
+      while (i !== -1) {
+        const range = document.createRange();
+        range.setStart(node, i);
+        range.setEnd(node, i + needle.length);
+        ranges.push(range);
+        i = hay.indexOf(needle, i + needle.length);
+      }
+    }
+    return ranges;
+  }
+
+  function applyFindHighlights() {
+    if (!highlightSupported) return;
+    CSS.highlights.delete("find-matches");
+    CSS.highlights.delete("find-current");
+    if (findMatches.length) {
+      CSS.highlights.set("find-matches", new window.Highlight(...findMatches));
+      if (findMatches[findCurrent]) {
+        CSS.highlights.set("find-current", new window.Highlight(findMatches[findCurrent]));
+      }
+    }
+  }
+
+  function updateFindCount() {
+    if (!findInput.value) {
+      findCount.textContent = "0/0";
+    } else if (!findMatches.length) {
+      findCount.textContent = "无结果";
+    } else {
+      findCount.textContent = findCurrent + 1 + "/" + findMatches.length;
+    }
+  }
+
+  function runFind() {
+    const root = getFindRoot();
+    findMatches = root ? collectFindRanges(root, findInput.value.trim(), findCaseSensitive) : [];
+    findCurrent = findMatches.length ? 0 : -1;
+    applyFindHighlights();
+    updateFindCount();
+    scrollToCurrentMatch();
+  }
+
+  function scheduleFind() {
+    clearTimeout(findDebounce);
+    findDebounce = setTimeout(runFind, 120);
+  }
+
+  function scrollToCurrentMatch() {
+    if (findCurrent < 0 || !findMatches[findCurrent]) return;
+    const rect = findMatches[findCurrent].getBoundingClientRect();
+    const viewRect = viewerEl.getBoundingClientRect();
+    const target =
+      viewerEl.scrollTop + (rect.top - viewRect.top) - viewRect.height * 0.35;
+    viewerEl.scrollTo({ top: Math.max(0, target), behavior: "auto" });
+  }
+
+  function stepFind(dir) {
+    if (!findMatches.length) return;
+    findCurrent = (findCurrent + dir + findMatches.length) % findMatches.length;
+    applyFindHighlights();
+    updateFindCount();
+    scrollToCurrentMatch();
+  }
+
+  function openFind() {
+    if (!getActiveTab()) {
+      showNotice("先打开一个文档再查找", true);
+      return;
+    }
+    findBar.hidden = false;
+    findInput.focus();
+    findInput.select();
+    if (findInput.value) runFind();
+  }
+
+  function closeFind() {
+    findBar.hidden = true;
+    findMatches = [];
+    findCurrent = -1;
+    if (highlightSupported) {
+      CSS.highlights.delete("find-matches");
+      CSS.highlights.delete("find-current");
+    }
+  }
+
+  findInput.addEventListener("input", scheduleFind);
+  findInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      stepFind(e.shiftKey ? -1 : 1); // Enter/Shift+Enter 作为 Ctrl+N/P 的补充
+    } else if (e.key === "Escape") {
+      closeFind();
+    }
+  });
+
+  findNextBtn.addEventListener("click", () => stepFind(1));
+  findPrevBtn.addEventListener("click", () => stepFind(-1));
+  findCloseBtn.addEventListener("click", closeFind);
+  findCaseBtn.addEventListener("click", () => {
+    findCaseSensitive = !findCaseSensitive;
+    findCaseBtn.classList.toggle("on", findCaseSensitive);
+    runFind();
+  });
+
+  // 查找栏外点击不关闭（浮动面板）；Esc 全局兜底
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !findBar.hidden) closeFind();
+  });
+
+  /* ---------- 主进程推送 ---------- */
+
   /* ---------- 打开入口 ---------- */
 
   async function openFileViaDialog() {
@@ -1022,6 +1177,17 @@
       cycleTab(1);
     } else if (cmd === "prev") {
       cycleTab(-1);
+    }
+  });
+
+  // 查找加速器：Ctrl+F 打开 / Ctrl+N 下一个 / Ctrl+P 上一个（vim 方案）
+  window.api.onFindCommand((cmd) => {
+    if (cmd === "open") {
+      openFind();
+    } else if (cmd === "next") {
+      if (!findBar.hidden) stepFind(1);
+    } else if (cmd === "prev") {
+      if (!findBar.hidden) stepFind(-1);
     }
   });
 

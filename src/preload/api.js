@@ -59,6 +59,16 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
+   * 订阅查找命令（菜单加速器：Ctrl+F 打开 / Ctrl+N 下一个 / Ctrl+P 上一个）。
+   * @param {("open"|"next"|"prev") => void} callback
+   */
+  onFindCommand(callback) {
+    const wrapped = (_event, cmd) => callback(cmd);
+    ipcRenderer.on("app:find-command", wrapped);
+    return () => ipcRenderer.removeListener("app:find-command", wrapped);
+  },
+
+  /**
    * 订阅主进程推送的标签页命令（菜单加速器：关闭/切换）。
    * @param {("close"|"next"|"prev") => void} callback
    */

@@ -103,6 +103,22 @@
     </div>
   </div>
 
+  <!-- 查找栏（M3-5）：浮动于内容区右上角，Ctrl+F 呼出，Esc 关闭 -->
+  <div id="find-bar" hidden>
+    <input id="find-input" type="text" placeholder="查找…" spellcheck="false" />
+    <span id="find-count">0/0</span>
+    <button id="find-prev" type="button" title="上一个 (Ctrl+P)" tabindex="-1">
+      <svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 10l5-5 5 5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="find-next" type="button" title="下一个 (Ctrl+N)" tabindex="-1">
+      <svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 6l5 5 5-5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="find-case" type="button" title="区分大小写" tabindex="-1">Aa</button>
+    <button id="find-close" type="button" title="关闭 (Esc)" tabindex="-1">
+      <svg width="12" height="12" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+    </button>
+  </div>
+
   <!-- 拖入文件高亮遮罩（M3-3）：dragenter 显示，drop/dragleave 隐藏 -->
   <div id="drop-overlay" hidden>
     <div class="drop-box">放开以打开 Markdown 文档</div>

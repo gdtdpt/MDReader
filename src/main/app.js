@@ -286,6 +286,26 @@ function buildMenu() {
       ],
     },
     {
+      label: "查找",
+      submenu: [
+        {
+          label: "查找",
+          accelerator: "CmdOrCtrl+F",
+          click: () => pushFindCommand("open"),
+        },
+        {
+          label: "查找下一个",
+          accelerator: "CmdOrCtrl+N",
+          click: () => pushFindCommand("next"),
+        },
+        {
+          label: "查找上一个",
+          accelerator: "CmdOrCtrl+P",
+          click: () => pushFindCommand("prev"),
+        },
+      ],
+    },
+    {
       label: "标签页",
       submenu: [
         {
@@ -312,6 +332,12 @@ function buildMenu() {
 function pushTabCommand(cmd) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("app:tab-command", cmd);
+  }
+}
+
+function pushFindCommand(cmd) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("app:find-command", cmd);
   }
 }
 

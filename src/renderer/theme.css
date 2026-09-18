@@ -564,6 +564,98 @@ body {
   color: var(--text);
 }
 
+/* ---------- 查找栏（M3-5，Typora 右上浮动风格） ---------- */
+
+#find-bar {
+  position: fixed;
+  top: 78px; /* 标题栏38 + 工具栏34 + 6px 间距 */
+  right: 16px;
+  z-index: 85;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--content-bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  user-select: none;
+}
+
+#find-input {
+  width: 200px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+#find-input:focus {
+  border-color: var(--accent);
+}
+
+#find-count {
+  min-width: 44px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#find-bar button {
+  min-width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  padding: 0 4px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+#find-bar button:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+/* Aa 大小写开关激活态 */
+#find-bar button.on {
+  background: var(--hover-bg);
+  color: var(--accent);
+}
+
+/* ---------- 查找高亮（CSS Custom Highlight API，不改 DOM） ----------
+ * ::highlight() 伪元素对 CSS 变量支持不可靠，明暗两套固定色 */
+
+::highlight(find-matches) {
+  background-color: #ffd54d;
+  color: #24292f;
+}
+
+::highlight(find-current) {
+  background-color: #ff9e2c;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] ::highlight(find-matches) {
+  background-color: #635421;
+  color: #e6e2d8;
+}
+
+:root[data-theme="dark"] ::highlight(find-current) {
+  background-color: #b25e09;
+  color: #ffffff;
+}
+
 /* ---------- 正文（Typora 风格排版） ---------- */
 
 .markdown-body {
