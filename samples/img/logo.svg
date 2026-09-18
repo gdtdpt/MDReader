@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
+  <rect x="4" y="4" width="112" height="112" rx="16" fill="#e8f2fb" stroke="#185fa5" stroke-width="2"/>
+  <text x="60" y="56" text-anchor="middle" font-family="Segoe UI, Microsoft YaHei" font-size="26" font-weight="600" fill="#0c447c">MD</text>
+  <text x="60" y="84" text-anchor="middle" font-family="Segoe UI, Microsoft YaHei" font-size="16" fill="#185fa5">Reader</text>
+</svg>

@@ -1,0 +1,5 @@
+# 依赖（pnpm-lock.yaml 可完整还原）
+node_modules/
+
+# WorkBuddy 会话工作数据（非项目源码）
+.workbuddy/

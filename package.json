@@ -1,0 +1,15 @@
+{
+  "name": "mdreader",
+  "productName": "MDReader",
+  "version": "0.2.0",
+  "description": "内网脱机 Windows 10 1709 x64 本地 Markdown 阅读器",
+  "main": "src/main/app.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-packager . MDReader --platform=win32 --arch=x64 --icon=assets/icons/mdreader.ico --no-asar --no-prune --overwrite --out=dist"
+  },
+  "devDependencies": {
+    "electron": "22.3.27",
+    "electron-packager": "^17.1.1"
+  }
+}
