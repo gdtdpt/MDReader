@@ -50,62 +50,90 @@
     return;
   }
 
-  const md = window.markdownit({
-    html: false, // 原始 HTML 不进解析器，XSS 源头封禁
-    linkify: true,
-    typographer: true,
-    // 代码高亮：highlight.js 精简包（vendor/highlight.min.js，全局 hljs_bundle）
-    // 返回 "" 时 markdown-it 走默认转义路径，未知语言安全降级
-    highlight(str, lang) {
-      const hljs = window.hljs_bundle;
-      if (hljs && lang && hljs.getLanguage(lang)) {
-        try {
-          return (
-            '<pre><code class="hljs language-' +
-            lang +
-            '">' +
-            hljs.highlight(str, { language: lang }).value +
-            "</code></pre>"
-          );
-        } catch (_) {
-          /* 落入默认转义 */
+  /* ---------- markdown-it 实例工厂（M4 启动优化重构） ----------
+   * 启动只同步加载 markdown-it + DOMPurify（目标机实测 vendor 同步加载占 4.3s/4.8s），
+   * highlight/KaTeX/task-lists 由首绘后的 loadDeferredVendor() 异步加载，
+   * 到位后重建实例并重渲染（规则挂载全部收进工厂，重建即完整管线）。
+   * 高亮回调运行时读 window.hljs_bundle，缺库自然走默认转义降级。
+   */
+  function createMarkdownIt() {
+    const instance = window.markdownit({
+      html: false, // 原始 HTML 不进解析器，XSS 源头封禁
+      linkify: true,
+      typographer: true,
+      // 代码高亮：highlight.js 精简包（vendor/highlight.min.js，全局 hljs_bundle）
+      // 返回 "" 时 markdown-it 走默认转义路径，未知语言安全降级
+      highlight(str, lang) {
+        const hljs = window.hljs_bundle;
+        if (hljs && lang && hljs.getLanguage(lang)) {
+          try {
+            return (
+              '<pre><code class="hljs language-' +
+              lang +
+              '">' +
+              hljs.highlight(str, { language: lang }).value +
+              "</code></pre>"
+            );
+          } catch (_) {
+            /* 落入默认转义 */
+          }
         }
+        return "";
+      },
+    });
+
+    // 数学公式：KaTeX + texmath（vendor/markdown-it-math.min.js，全局 mdmath 注册函数）
+    if (typeof window.mdmath === "function") {
+      window.mdmath(instance);
+    }
+
+    // 任务列表：- [x] 渲染为复选框（vendor/markdown-it-task.min.js，全局 mdtasks）
+    if (typeof window.mdtasks === "function") {
+      instance.use(window.mdtasks);
+    }
+
+    const defaultFence =
+      instance.renderer.rules.fence ||
+      ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+
+    instance.renderer.rules.fence = (tokens, idx) => {
+      const token = tokens[idx];
+      if (token.info.trim() === "mermaid") {
+        return (
+          '<div class="mermaid-block" data-mermaid="pending">' +
+          instance.utils.escapeHtml(token.content) +
+          "</div>"
+        );
       }
-      return "";
-    },
-  });
+      return defaultFence(tokens, idx, instance.options, {}, instance.renderer);
+    };
 
-  // 数学公式：KaTeX + texmath（vendor/markdown-it-math.min.js，全局 mdmath 注册函数）
-  if (typeof window.mdmath === "function") {
-    window.mdmath(md);
+    const defaultHeadingOpen =
+      instance.renderer.rules.heading_open ||
+      ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+
+    instance.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
+      const token = tokens[idx];
+      const id = "mdh-" + env.headingSeq++;
+      token.attrSet("id", id);
+      env.outline.push({
+        id,
+        level: Number(token.tag.slice(1)),
+        text: inlinePlainText(tokens[idx + 1]),
+      });
+      return defaultHeadingOpen(tokens, idx, options, env, self);
+    };
+
+    return instance;
   }
 
-  // 任务列表：- [x] 渲染为复选框（vendor/markdown-it-task.min.js，全局 mdtasks）
-  if (typeof window.mdtasks === "function") {
-    md.use(window.mdtasks);
-  }
+  let md = createMarkdownIt();
 
   /* ---------- Mermaid 流程图（M2-4） ----------
    * fence 规则把 ```mermaid 代码块转为占位 div；
    * 页面里检测到占位块才动态加载 vendor/mermaid.min.js（UMD，全局 mermaid），
    * 普通文档零加载成本。渲染交给 mermaid.init，解析失败由 mermaid 输出错误图形。
    */
-
-  const defaultFence =
-    md.renderer.rules.fence ||
-    ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
-
-  md.renderer.rules.fence = (tokens, idx) => {
-    const token = tokens[idx];
-    if (token.info.trim() === "mermaid") {
-      return (
-        '<div class="mermaid-block" data-mermaid="pending">' +
-        md.utils.escapeHtml(token.content) +
-        "</div>"
-      );
-    }
-    return defaultFence(tokens, idx, md.options, {}, md.renderer);
-  };
 
   let mermaidLoadState = ""; // "" | "loading" | "ready"
 
@@ -133,22 +161,6 @@
     else if (token) out = token.content;
     return out.replace(/\s+/g, " ").trim();
   }
-
-  const defaultHeadingOpen =
-    md.renderer.rules.heading_open ||
-    ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
-
-  md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
-    const token = tokens[idx];
-    const id = "mdh-" + env.headingSeq++;
-    token.attrSet("id", id);
-    env.outline.push({
-      id,
-      level: Number(token.tag.slice(1)),
-      text: inlinePlainText(tokens[idx + 1]),
-    });
-    return defaultHeadingOpen(tokens, idx, options, env, self);
-  };
 
   function runMermaid(blocks) {
     const mermaid = window.mermaid;
@@ -1210,6 +1222,42 @@
       });
     } catch (_) {
       /* 上报失败不影响功能 */
+    }
+    loadDeferredVendor(); // 首绘已可达成，异步补齐高亮/公式/任务列表
+  }
+
+  /* ---------- vendor 懒加载（M4 启动优化） ----------
+   * 目标机实测：5 个 vendor 同步脚本加载占首屏 4.3s/4.8s（磁盘/杀软/CPU 稳态成本）。
+   * 首绘后异步补齐其余三个库，全部到位后重建 markdown-it 实例并重渲染，
+   * 滚动位置由 activateTab 恢复；单个脚本失败不阻塞其余（缺库功能降级，与原行为一致）。
+   */
+  const DEFERRED_VENDOR = [
+    "../../vendor/highlight.min.js",
+    "../../vendor/markdown-it-math.min.js",
+    "../../vendor/markdown-it-task.min.js",
+  ];
+  let deferredState = ""; // "" | "loading" | "done"
+
+  function loadDeferredVendor() {
+    if (deferredState) return;
+    deferredState = "loading";
+    let pending = DEFERRED_VENDOR.length;
+    const settle = () => {
+      if (--pending > 0) return;
+      md = createMarkdownIt();
+      for (const t of tabs) {
+        renderDocument(t); // LRU 快照一并失效重建，走新管线
+      }
+      const active = getActiveTab();
+      if (active) activateTab(active.id); // 恢复滚动 + 刷新大纲
+      deferredState = "done";
+    };
+    for (const src of DEFERRED_VENDOR) {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = settle;
+      s.onerror = settle;
+      document.head.appendChild(s);
     }
   }
 
