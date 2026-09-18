@@ -3,3 +3,6 @@ node_modules/
 
 # WorkBuddy 会话工作数据（非项目源码）
 .workbuddy/
+
+# 打包产物（可由 pack 脚本复现）
+dist/

@@ -14,6 +14,35 @@ if (!gotLock) {
   app.quit();
 }
 
+/* ---------- 启动性能打点（M4 目标机量化用） ----------
+ * 主进程标记：process 起点即本模块顶层；appReady / windowCreated / firstPaint。
+ * 渲染层在首文档（或空状态）渲染完成后经 app:perf 回报 nav 相对耗时，
+ * 主进程合并写入 userData/startup-timing.log，每次启动一行。
+ */
+const PERF_T0 = Date.now();
+const PERF_MARKS = {};
+function perfMark(name) {
+  PERF_MARKS[name] = Date.now() - PERF_T0;
+}
+function appendStartupLog(rendererPerf) {
+  const line = {
+    time: new Date().toISOString(),
+    processToReady: PERF_MARKS.appReady,
+    processToWindow: PERF_MARKS.windowCreated,
+    processToPaint: PERF_MARKS.firstPaint,
+    renderer: rendererPerf || null,
+  };
+  try {
+    fs.appendFile(
+      path.join(app.getPath("userData"), "startup-timing.log"),
+      JSON.stringify(line) + "\n",
+      () => {}
+    );
+  } catch (_) {
+    /* 日志失败不影响功能 */
+  }
+}
+
 let mainWindow = null;
 
 /* ---------- 文件读取 ---------- */
@@ -221,6 +250,7 @@ function createWindow() {
   });
 
   mainWindow.once("ready-to-show", () => {
+    perfMark("firstPaint");
     mainWindow.show();
   });
 
@@ -357,6 +387,15 @@ function registerIpc() {
     return setDefaultOpener();
   });
 
+  // 渲染层启动性能回报 → 合并写日志（每次启动一行）。
+  // 延迟 1.5s 落盘：等 ready-to-show（首次绘制）打点到位，避免字段缺失
+  ipcMain.on("app:perf", (_event, data) => {
+    const perf = data && typeof data === "object"
+      ? { scripts: data.scripts, firstRender: data.firstRender, tabs: data.tabs }
+      : null;
+    setTimeout(() => appendStartupLog(perf), 1500);
+  });
+
   // 无边框窗口控制（自绘标题栏用）
   ipcMain.on("win:minimize", () => {
     if (mainWindow) mainWindow.minimize();
@@ -384,9 +423,11 @@ function registerIpc() {
 /* ---------- 生命周期 ---------- */
 
 app.whenReady().then(() => {
+  perfMark("appReady");
   registerIpc();
   buildMenu();
   createWindow();
+  perfMark("windowCreated");
 
   app.on("second-instance", (_event, argv) => {
     if (mainWindow) {

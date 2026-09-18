@@ -442,6 +442,7 @@
     activateTab(tab.id);
     updateEmptyState();
     scheduleSessionSave();
+    reportStartupPerf();
   }
 
   function closeTab(id) {
@@ -813,6 +814,7 @@
         updateCurrentHeading();
       }
     }
+    reportStartupPerf();
   }
 
   window.api.onInitMeta((meta) => {
@@ -1190,6 +1192,29 @@
       if (!findBar.hidden) stepFind(-1);
     }
   });
+
+  /* ---------- 启动性能打点（M4 目标机量化） ----------
+   * scripts：本脚本执行时刻 = 全部 vendor 同步脚本加载完（导航起点为基准）；
+   * firstRender：首个文档（或空状态）渲染完成时刻。首渲染后回报一次，主进程写日志。
+   */
+  const PERF_SCRIPTS = performance.now();
+  let perfReported = false;
+  function reportStartupPerf() {
+    if (perfReported) return;
+    perfReported = true;
+    try {
+      window.api.sendPerf({
+        scripts: Math.round(PERF_SCRIPTS),
+        firstRender: Math.round(performance.now()),
+        tabs: tabs.length,
+      });
+    } catch (_) {
+      /* 上报失败不影响功能 */
+    }
+  }
+
+  // 兜底：无文件且无会话等任何路径都没触发时也要有一次回报
+  setTimeout(reportStartupPerf, 3000);
 
   updateEmptyState();
 })();

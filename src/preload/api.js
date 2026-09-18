@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
+   * 上报启动性能数据（渲染层导航起点为基准的毫秒数）。
+   * @param {{scripts: number, firstRender: number, tabs: number}} data
+   */
+  sendPerf(data) {
+    ipcRenderer.send("app:perf", data);
+  },
+
+  /**
    * 订阅启动元信息（渲染层据此决定是否恢复上次会话）。
    * @param {(meta: {hasStartupFiles: boolean}) => void} callback
    */
