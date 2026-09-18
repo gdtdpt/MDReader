@@ -104,7 +104,6 @@
           </span>
         </div>
         <div id="panes"></div>
-        <div id="error-banner" hidden></div>
       </main>
     </div>
   </div>
@@ -124,6 +123,10 @@
       <svg width="12" height="12" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
     </button>
   </div>
+
+  <!-- 通知 / 错误浮层：fixed 悬浮于窗口底部居中，不随正文滚动
+       （曾放在 #panes 之后且用 sticky，静态位置落在文档末尾，长文档下必须滚到底才可见） -->
+  <div id="error-banner" hidden></div>
 
   <!-- 拖入文件高亮遮罩（M3-3）：dragenter 显示，drop/dragleave 隐藏 -->
   <div id="drop-overlay" hidden>

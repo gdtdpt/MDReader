@@ -526,20 +526,43 @@ body {
   color: var(--accent);
 }
 
-/* ---------- 错误提示 ---------- */
+/* ---------- 通知 / 错误浮层 ---------- */
 
+/* 悬浮于窗口底部居中（fixed，脱离文档流）：
+   - 不随正文滚动，长文档下也始终可见。此前是 sticky 且位于 #panes 之后，
+     静态位置落在文档末尾，sticky 不会把「尚未滚过」的元素上移，于是它钉在文末，
+     必须往下翻才看得到
+   - 不参与布局：弹出/消失不顶动正文，也不改变当前滚动位置
+   - pointer-events:none：纯提示，不拦截正文的点击（复制链接后常需立刻点别处） */
 #error-banner {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  margin: 12px auto;
-  max-width: var(--content-max);
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 95; /* 高于查找栏(85) 与 ··· 菜单(90)，低于拖拽遮罩(100)/模态(200) */
+  max-width: min(var(--content-max), calc(100vw - 48px));
   padding: 10px 16px;
   border: 1px solid var(--error-border);
   border-radius: 6px;
   background: var(--error-bg);
   color: var(--error-fg);
   font-size: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  overflow-wrap: anywhere; /* 长链接提示不撑破浮层 */
+  pointer-events: none;
+  animation: notice-in 140ms ease-out;
+}
+
+/* hidden → 显示时动画会自动重放，让瞬时提示更容易被注意到。
+   只动 transform 不动 opacity：窗口被遮挡/最小化时合成帧会暂停，
+   若淡入卡在起始帧就会把提示变成彻底看不见的（比原问题更糟）。 */
+@keyframes notice-in {
+  from {
+    transform: translate(-50%, 8px);
+  }
+  to {
+    transform: translate(-50%, 0);
+  }
 }
 
 /* ---------- 拖拽打开遮罩（M3-3） ---------- */
