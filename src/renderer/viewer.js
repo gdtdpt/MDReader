@@ -27,6 +27,9 @@
   const tbMore = document.getElementById("tb-more");
   const moreMenu = document.getElementById("more-menu");
   const recentListEl = document.getElementById("recent-list");
+  const closeAskEl = document.getElementById("close-ask");
+  const closeTrayEl = document.getElementById("close-tray");
+  const closeQuitEl = document.getElementById("close-quit");
   const modifiedBanner = document.getElementById("modified-banner");
   const modifiedText = document.getElementById("modified-text");
   const modifiedReload = document.getElementById("modified-reload");
@@ -711,6 +714,150 @@
     }
   }
 
+  /* ---------- 关闭窗口行为（托盘常驻，M4） ----------
+   * "ask" 每次询问 / "tray" 最小化到托盘 / "quit" 完全退出。
+   * 真值由主进程持久化（mdreader-prefs.json），这里只展示与切换。
+   */
+  let closeAction = "ask";
+  window.api.getCloseAction().then((v) => {
+    if (v === "ask" || v === "tray" || v === "quit") closeAction = v;
+  });
+  window.api.onCloseActionChanged((v) => {
+    closeAction = v;
+  });
+
+  const CLOSE_ITEMS = [
+    ["ask", closeAskEl],
+    ["tray", closeTrayEl],
+    ["quit", closeQuitEl],
+  ];
+
+  function renderCloseActionItems() {
+    for (const [value, el] of CLOSE_ITEMS) {
+      el.querySelector(".menu-check").textContent = closeAction === value ? "✓" : "";
+    }
+  }
+
+  for (const [value, el] of CLOSE_ITEMS) {
+    el.addEventListener("click", async () => {
+      hideMoreMenu();
+      const applied = await window.api.setCloseAction(value);
+      if (applied === "ask" || applied === "tray" || applied === "quit") {
+        closeAction = applied;
+      }
+    });
+  }
+
+  /* ---------- 应用内模态对话框（M4，替代原生 showMessageBox） ----------
+   * Promise 风格：appConfirm({title, message, detail, buttons, checkboxLabel})
+   * → { index, checked }；Esc / 点击遮罩 = index -1（取消）。
+   * 样式走 CSS 变量，明暗主题即时跟随。
+   */
+  const modalOverlay = document.getElementById("modal-overlay");
+  const modalCard = document.getElementById("modal-card");
+  const modalCheckbox = document.getElementById("modal-checkbox");
+  let modalResolve = null;
+  let modalPrevFocus = null;
+
+  function settleModal(index) {
+    if (!modalResolve) return;
+    const resolve = modalResolve;
+    modalResolve = null;
+    const checked = modalCheckbox.checked;
+    modalOverlay.hidden = true;
+    if (modalPrevFocus && typeof modalPrevFocus.focus === "function") {
+      modalPrevFocus.focus();
+    }
+    resolve({ index, checked });
+  }
+
+  function appConfirm(opts) {
+    return new Promise((resolve) => {
+      modalResolve = resolve;
+      modalPrevFocus = document.activeElement;
+      document.getElementById("modal-title").textContent = opts.title || "";
+      const msgEl = document.getElementById("modal-message");
+      msgEl.textContent = opts.message || "";
+      msgEl.hidden = !opts.message;
+      const detEl = document.getElementById("modal-detail");
+      detEl.textContent = opts.detail || "";
+      detEl.hidden = !opts.detail;
+      const rowEl = document.getElementById("modal-checkbox-row");
+      document.getElementById("modal-checkbox-label").textContent =
+        opts.checkboxLabel || "";
+      rowEl.hidden = !opts.checkboxLabel;
+      modalCheckbox.checked = false;
+      const btnBox = document.getElementById("modal-buttons");
+      btnBox.textContent = "";
+      for (const b of opts.buttons || [{ label: "确定", primary: true }]) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "modal-btn" + (b.primary ? " primary" : "");
+        btn.textContent = b.label;
+        btn.addEventListener("click", () => settleModal(opts.buttons.indexOf(b)));
+        btnBox.appendChild(btn);
+      }
+      modalOverlay.hidden = false;
+      const primary = btnBox.querySelector(".primary") || btnBox.firstChild;
+      primary.focus();
+    });
+  }
+
+  // Esc 取消 + Tab 焦点圈定（捕获阶段拦截，避免触发查找栏等其他快捷键）
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (modalOverlay.hidden) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        settleModal(-1);
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        const nodes = [
+          ...(document.getElementById("modal-checkbox-row").hidden
+            ? []
+            : [modalCheckbox]),
+          ...modalCard.querySelectorAll(".modal-btn"),
+        ];
+        const i = nodes.indexOf(document.activeElement);
+        const next = e.shiftKey
+          ? nodes[(i - 1 + nodes.length) % nodes.length]
+          : nodes[(i + 1) % nodes.length];
+        next.focus();
+      }
+    },
+    true
+  );
+
+  // 点击遮罩空白处 = 取消
+  modalOverlay.addEventListener("mousedown", (e) => {
+    if (e.target === modalOverlay) settleModal(-1);
+  });
+
+  // 关窗询问：主进程拦截 close 后推送，弹自绘框并把决策回传
+  window.api.onCloseRequest(async () => {
+    const res = await appConfirm({
+      title: "关闭 MDReader",
+      message: "完全退出，还是最小化到系统托盘继续后台运行？",
+      detail: "驻留托盘后，双击 .md 文件可立即打开（无需等待启动）。",
+      buttons: [
+        { label: "最小化到托盘", primary: true },
+        { label: "完全退出" },
+        { label: "取消" },
+      ],
+      checkboxLabel: "记住我的选择（可在 ··· 菜单中修改）",
+    });
+    const choice = res.index === 0 ? "tray" : res.index === 1 ? "quit" : "cancel";
+    window.api.closeDecision({
+      choice,
+      remember: res.checked && choice !== "cancel",
+    });
+  });
+
+  // 打开失败：应用内错误提示条（替代原生 showErrorBox）
+  window.api.onOpenError((message) => showError(message));
+
   async function openRecentFile(p) {
     const payload = await window.api.readFile(p);
     if (payload.ok) {
@@ -727,6 +874,7 @@
 
   function showMoreMenu() {
     renderMoreMenu();
+    renderCloseActionItems();
     moreMenu.hidden = false; // 先显示才有几何信息可量，同帧定位不闪烁
     // 菜单左缘对齐按钮左缘、贴按钮下方 4px；越出视口右缘时右移收进来
     const rect = tbMore.getBoundingClientRect();
@@ -759,7 +907,24 @@
 
   document.getElementById("menu-default-opener").addEventListener("click", async () => {
     hideMoreMenu();
-    const result = await window.api.setDefaultOpener();
+    // 先查关联：有冲突才弹自绘确认框（应用内风格），无冲突直接写
+    const check = await window.api.checkDefaultOpener();
+    if (check.conflict) {
+      const res = await appConfirm({
+        title: "设为默认打开方式",
+        message: "检测到 .md 当前关联到：" + check.current,
+        detail: "是否改为用 MDReader 打开？仅修改当前用户设置，可随时在系统设置中改回。",
+        buttons: [
+          { label: "改为 MDReader", primary: true },
+          { label: "取消" },
+        ],
+      });
+      if (res.index !== 0) {
+        showNotice("已取消，未修改关联", true);
+        return;
+      }
+    }
+    const result = await window.api.applyDefaultOpener();
     showNotice(result.message, result.ok);
   });
 

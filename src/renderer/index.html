@@ -69,6 +69,11 @@
     <div class="menu-item" id="menu-clear-recents" tabindex="-1">清空最近文件</div>
     <div class="menu-sep"></div>
     <div class="menu-item" id="menu-default-opener" tabindex="-1">设为默认打开方式 (.md)</div>
+    <div class="menu-sep"></div>
+    <div class="menu-label">关闭窗口时</div>
+    <div class="menu-item menu-radio" id="close-ask" tabindex="-1"><span class="menu-check"></span>每次询问</div>
+    <div class="menu-item menu-radio" id="close-tray" tabindex="-1"><span class="menu-check"></span>最小化到系统托盘</div>
+    <div class="menu-item menu-radio" id="close-quit" tabindex="-1"><span class="menu-check"></span>完全退出</div>
   </div>
 
   <!-- 主内容区：左侧大纲侧栏（M3-2，可收起）+ 右侧 tab/正文列 -->
@@ -122,6 +127,20 @@
   <!-- 拖入文件高亮遮罩（M3-3）：dragenter 显示，drop/dragleave 隐藏 -->
   <div id="drop-overlay" hidden>
     <div class="drop-box">放开以打开 Markdown 文档</div>
+  </div>
+
+  <!-- 应用内模态对话框（M4）：替代原生 showMessageBox，样式随明暗主题 -->
+  <div id="modal-overlay" hidden>
+    <div id="modal-card" role="dialog" aria-modal="true">
+      <div id="modal-title"></div>
+      <div id="modal-message" hidden></div>
+      <div id="modal-detail" hidden></div>
+      <label id="modal-checkbox-row" hidden>
+        <input type="checkbox" id="modal-checkbox" />
+        <span id="modal-checkbox-label"></span>
+      </label>
+      <div id="modal-buttons"></div>
+    </div>
   </div>
 
   <!-- 启动仅同步加载必需库（M4 启动优化：highlight/KaTeX/task 由 viewer.js 首绘后懒加载） -->

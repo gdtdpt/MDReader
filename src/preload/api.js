@@ -41,11 +41,19 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
-   * 将 .md/.markdown 注册为 MDReader 打开（HKCU，已有关联时主进程弹确认）。
+   * 查询 .md 当前关联（只查不写，渲染层据此决定是否弹自绘确认框）。
+   * @returns {Promise<{conflict: boolean, current: string|null, error?: string}>}
+   */
+  checkDefaultOpener() {
+    return ipcRenderer.invoke("opener:check");
+  },
+
+  /**
+   * 将 .md/.markdown 注册为 MDReader 打开（HKCU 写注册表，不弹任何系统框）。
    * @returns {Promise<{ok: boolean, message: string}>}
    */
-  setDefaultOpener() {
-    return ipcRenderer.invoke("app:set-default-opener");
+  applyDefaultOpener() {
+    return ipcRenderer.invoke("opener:apply");
   },
 
   /**
@@ -94,6 +102,61 @@ contextBridge.exposeInMainWorld("api", {
     if (mode === "light" || mode === "dark" || mode === "system") {
       ipcRenderer.send("theme:set", mode);
     }
+  },
+
+  /**
+   * 查询关闭窗口行为（"ask" 每次询问 / "tray" 最小化到托盘 / "quit" 完全退出）。
+   * @returns {Promise<"ask"|"tray"|"quit">}
+   */
+  getCloseAction() {
+    return ipcRenderer.invoke("prefs:get-close-action");
+  },
+
+  /**
+   * 设置关闭窗口行为（··· 菜单），主进程持久化并广播变更。
+   * @param {"ask"|"tray"|"quit"} action
+   * @returns {Promise<"ask"|"tray"|"quit">} 生效后的值
+   */
+  setCloseAction(action) {
+    return ipcRenderer.invoke("prefs:set-close-action", action);
+  },
+
+  /**
+   * 订阅关窗询问（主进程拦截 close 后触发；渲染层弹自绘模态框并回传决策）。
+   * @param {() => void} callback
+   */
+  onCloseRequest(callback) {
+    const wrapped = () => callback();
+    ipcRenderer.on("app:close-request", wrapped);
+    return () => ipcRenderer.removeListener("app:close-request", wrapped);
+  },
+
+  /**
+   * 回传关窗询问的决策（choice: "tray"|"quit"|"cancel"，remember: 勾选记住）。
+   * @param {{choice: "tray"|"quit"|"cancel", remember: boolean}} payload
+   */
+  closeDecision(payload) {
+    ipcRenderer.send("app:close-decision", payload);
+  },
+
+  /**
+   * 订阅打开失败提示（应用内错误提示条，替代原生 showErrorBox）。
+   * @param {(message: string) => void} callback
+   */
+  onOpenError(callback) {
+    const wrapped = (_event, message) => callback(message);
+    ipcRenderer.on("app:open-error", wrapped);
+    return () => ipcRenderer.removeListener("app:open-error", wrapped);
+  },
+
+  /**
+   * 订阅关闭行为变更（关窗询问勾选「记住」时推送）。
+   * @param {("ask"|"tray"|"quit") => void} callback
+   */
+  onCloseActionChanged(callback) {
+    const wrapped = (_event, action) => callback(action);
+    ipcRenderer.on("app:close-action-changed", wrapped);
+    return () => ipcRenderer.removeListener("app:close-action-changed", wrapped);
   },
 
   /**

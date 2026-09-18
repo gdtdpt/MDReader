@@ -1,6 +1,15 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  Menu,
+  nativeTheme,
+  Tray,
+  nativeImage,
+} = require("electron");
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -43,7 +52,165 @@ function appendStartupLog(rendererPerf) {
   }
 }
 
+/* ---------- 托盘常驻与关闭行为（M4，Heinrich 确认方案） ----------
+ * 不做开机自启；点 × 关窗时由用户选择「最小化到托盘 / 完全退出」，
+ * 首次询问 + 可勾选记住；偏好存 userData/mdreader-prefs.json
+ * （主进程要在 close 事件里同步决策，用不了渲染层 localStorage）。
+ * 常驻 = mainWindow.hide() 而非销毁：唤起时不重起渲染进程，
+ * 这是「双击 .md 秒开」的前提（目标机渲染进程冷启约 4.9s）。
+ */
+const CLOSE_ACTIONS = ["ask", "tray", "quit"];
+const PREFS_FILE = "mdreader-prefs.json";
+let prefsCache = null;
+let tray = null;
+let isQuitting = false;
+let closeDialogOpen = false;
+
+function prefsFilePath() {
+  return path.join(app.getPath("userData"), PREFS_FILE);
+}
+
+function readPrefs() {
+  if (prefsCache) return prefsCache;
+  let data = {};
+  try {
+    data = JSON.parse(fs.readFileSync(prefsFilePath(), "utf8")) || {};
+  } catch (_) {
+    data = {}; // 首次运行 / 文件损坏 → 全默认
+  }
+  prefsCache = {
+    closeAction: CLOSE_ACTIONS.includes(data.closeAction) ? data.closeAction : "ask",
+    trayTipShown: !!data.trayTipShown,
+  };
+  return prefsCache;
+}
+
+function writePrefs(patch) {
+  const next = Object.assign({}, readPrefs(), patch);
+  prefsCache = next;
+  try {
+    fs.writeFileSync(prefsFilePath(), JSON.stringify(next, null, 2), "utf8");
+  } catch (_) {
+    /* 持久化失败退化为本次会话内生效 */
+  }
+  return next;
+}
+
+function setCloseAction(action) {
+  if (!CLOSE_ACTIONS.includes(action)) return readPrefs().closeAction;
+  const next = writePrefs({ closeAction: action });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("app:close-action-changed", next.closeAction);
+  }
+  return next.closeAction;
+}
+
+function createTray() {
+  if (tray) return tray;
+  const iconsDir = path.join(__dirname, "..", "..", "assets", "icons");
+  // 优先多尺寸 ICO（各 DPI 下更锐利），读不出再退 32px PNG，最后退应用图标
+  let image = nativeImage.createFromPath(path.join(iconsDir, "tray.ico"));
+  if (image.isEmpty()) {
+    image = nativeImage.createFromPath(path.join(iconsDir, "tray.png"));
+  }
+  if (image.isEmpty()) {
+    image = nativeImage.createFromPath(path.join(iconsDir, "mdreader.ico"));
+  }
+  tray = new Tray(image);
+  tray.setToolTip("MDReader 常驻中 — 双击 .md 文件可立即打开");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "显示主窗口", click: () => showWindow() },
+      { type: "separator" },
+      { label: "退出 MDReader", click: () => quitApp() },
+    ])
+  );
+  tray.on("click", () => showWindow());
+  tray.on("double-click", () => showWindow());
+
+  // 首次驻留给一次性气泡提示，避免用户误以为应用没关掉
+  if (!readPrefs().trayTipShown) {
+    writePrefs({ trayTipShown: true });
+    try {
+      tray.displayBalloon({
+        title: "MDReader 仍在后台运行",
+        content: "双击 .md 文件可立即打开；右键托盘图标可显示窗口或退出。",
+      });
+    } catch (_) {
+      /* 气泡失败无碍 */
+    }
+  }
+  return tray;
+}
+
+function destroyTray() {
+  if (tray) {
+    try {
+      tray.destroy();
+    } catch (_) {
+      /* 已销毁则忽略 */
+    }
+    tray = null;
+  }
+}
+
+function hideToTray() {
+  createTray();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
+}
+
+function showWindow() {
+  destroyTray(); // 托盘图标只在常驻期间存在，窗口可见即收起
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function quitApp() {
+  isQuitting = true;
+  destroyTray();
+  app.quit();
+}
+
 let mainWindow = null;
+
+/* 原生关窗询问：渲染层自绘模态框不可用时的兜底（脚本出错 / 消息应答超时） */
+function showNativeCloseDialog() {
+  dialog
+    .showMessageBox(mainWindow, {
+      type: "question",
+      title: "关闭 MDReader",
+      message: "完全退出，还是最小化到系统托盘继续后台运行？",
+      detail: "驻留托盘后，双击 .md 文件可立即打开（无需等待启动）。",
+      buttons: ["最小化到托盘", "完全退出", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      checkboxLabel: "记住我的选择（可在 ··· 菜单中修改）",
+      checkboxChecked: false,
+      noLink: true,
+    })
+    .then((res) => {
+      closeDialogOpen = false;
+      if (res.response === 2) return; // 取消：窗口保持原样
+      if (res.checkboxChecked) {
+        writePrefs({ closeAction: res.response === 0 ? "tray" : "quit" });
+      }
+      if (res.response === 0) {
+        hideToTray();
+      } else {
+        quitApp();
+      }
+    })
+    .catch(() => {
+      closeDialogOpen = false;
+    });
+}
 
 /* ---------- 文件读取 ---------- */
 
@@ -105,7 +272,10 @@ async function openViaDialogAndPush() {
   if (file.ok) {
     pushOpenFile(file);
   } else {
-    dialog.showErrorBox("打开失败", file.error);
+    // 应用内错误提示条（渲染层 showError），不再弹原生 showErrorBox
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("app:open-error", file.error);
+    }
   }
 }
 
@@ -164,27 +334,24 @@ function regAdd(args) {
   });
 }
 
-async function setDefaultOpener() {
-  const exePath = process.execPath; // 打包后即 MDReader.exe，开发期为 electron.exe
+async function checkDefaultOpener() {
+  // 只查不写：是否存在冲突关联，由渲染层弹自绘确认框后再决定是否 apply
   try {
     const current =
       (await regQueryDefault("HKCU\\Software\\Classes\\.md")) ||
       (await regQueryDefault("HKCR\\.md"));
     if (current && current !== OPENER_PROG_ID) {
-      const choice = dialog.showMessageBoxSync(mainWindow, {
-        type: "question",
-        title: "设为默认打开方式",
-        message: "检测到 .md 当前关联到：" + current,
-        detail:
-          "是否改为用 MDReader 打开？仅修改当前用户设置，可随时在系统设置中改回。",
-        buttons: ["改为 MDReader", "取消"],
-        defaultId: 0,
-        cancelId: 1,
-      });
-      if (choice !== 0) {
-        return { ok: false, message: "已取消" };
-      }
+      return { conflict: true, current };
     }
+    return { conflict: false, current: null };
+  } catch (err) {
+    return { conflict: false, current: null, error: err.message };
+  }
+}
+
+async function applyDefaultOpener() {
+  const exePath = process.execPath; // 打包后即 MDReader.exe，开发期为 electron.exe
+  try {
     await regAdd([
       "HKCU\\Software\\Classes\\" + OPENER_PROG_ID,
       "/ve",
@@ -265,6 +432,34 @@ function createWindow() {
   };
   mainWindow.on("maximize", sendMaximized);
   mainWindow.on("unmaximize", sendMaximized);
+
+  // 关窗拦截：按用户偏好决定「询问 / 常驻托盘 / 完全退出」；
+  // 常驻用 hide() 保住渲染进程，双击 .md 走单实例唤起才是秒开。
+  // 询问优先用渲染层自绘模态框（与整体风格一致），渲染层不可用时回退原生框
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return; // 托盘退出 / app.quit()，放行
+    const action = readPrefs().closeAction;
+    if (action === "quit") return; // 记住为完全退出：直接放行
+    event.preventDefault();
+    if (closeDialogOpen) return; // 对话框已开着，忽略重复触发
+    if (action === "tray") {
+      hideToTray();
+      return;
+    }
+    closeDialogOpen = true;
+    const wc = mainWindow.webContents;
+    if (wc && !wc.isDestroyed() && !wc.isLoading()) {
+      wc.send("app:close-request");
+      // 渲染层 8s 内未应答（脚本异常 / 消息丢失）→ 回退原生对话框
+      setTimeout(() => {
+        if (closeDialogOpen && mainWindow && !mainWindow.isDestroyed()) {
+          showNativeCloseDialog();
+        }
+      }, 8000);
+    } else {
+      showNativeCloseDialog();
+    }
+  });
 
   // 开发期保留 DevTools 快捷键；打包后由菜单模板控制
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
@@ -383,8 +578,32 @@ function registerIpc() {
   ipcMain.handle("file:stat", (_event, filePath) => {
     return statFile(filePath);
   });
-  ipcMain.handle("app:set-default-opener", () => {
-    return setDefaultOpener();
+  ipcMain.handle("opener:check", () => {
+    return checkDefaultOpener();
+  });
+  ipcMain.handle("opener:apply", () => {
+    return applyDefaultOpener();
+  });
+
+  // 关闭行为偏好（渲染层 ··· 菜单读写；关窗询问勾选「记住」时主动推送变更）
+  ipcMain.handle("prefs:get-close-action", () => readPrefs().closeAction);
+  ipcMain.handle("prefs:set-close-action", (_event, action) => setCloseAction(action));
+
+  // 渲染层自绘关窗询问的应答；原生兜底框已接管或已处理时（closeDialogOpen=false）忽略
+  ipcMain.on("app:close-decision", (_event, payload) => {
+    if (!closeDialogOpen) return;
+    closeDialogOpen = false;
+    const choice = payload && typeof payload === "object" ? payload.choice : null;
+    const remember = !!(payload && payload.remember);
+    if (choice !== "tray" && choice !== "quit") return; // cancel / 非法值：窗口保持原样
+    if (remember) {
+      writePrefs({ closeAction: choice });
+    }
+    if (choice === "tray") {
+      hideToTray();
+    } else {
+      quitApp();
+    }
   });
 
   // 渲染层启动性能回报 → 合并写日志（每次启动一行）。
@@ -430,15 +649,19 @@ app.whenReady().then(() => {
   perfMark("windowCreated");
 
   app.on("second-instance", (_event, argv) => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+    // 常驻托盘时窗口是隐藏的：先恢复可见（并收起托盘），再打开文件
+    showWindow();
     openFromArgv(argv);
   });
 
-  // M1：单窗口模型，全平台关闭即退出
+  app.on("before-quit", () => {
+    isQuitting = true; // 任何退出路径都不再被 close 拦截
+  });
+
+  // 单窗口模型：正常关闭即退出；常驻中窗口不会真正 close，此事件理论上不触发，
+  // 兜底防御：托盘还在（常驻态）时不退出
   app.on("window-all-closed", () => {
+    if (!isQuitting && tray) return;
     app.quit();
   });
 });
