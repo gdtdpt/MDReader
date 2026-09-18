@@ -540,6 +540,75 @@
     renderOutline();
   });
 
+  /* ---------- 拖拽打开（M3-3） ----------
+   * Electron 22 渲染层 File.path 直接携带完整路径（无需主进程转发），
+   * 拿到路径后走既有 readFile → openDocument 管线（多文件多 tab、去重聚焦）。
+   */
+
+  // 与主进程 MD_EXTENSIONS 保持一致（渲染层拿不到主进程常量，改动时需两边同步）
+  const DRAG_EXTENSIONS = ["md", "markdown", "mdown", "mkdn", "txt"];
+  const dropOverlay = document.getElementById("drop-overlay");
+  let dragDepth = 0;
+
+  function hasDraggableExtension(name) {
+    const m = /\.([a-z0-9]+)$/i.exec(String(name));
+    return !!m && DRAG_EXTENSIONS.includes(m[1].toLowerCase());
+  }
+
+  window.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    const types = (e.dataTransfer && Array.from(e.dataTransfer.types)) || [];
+    if (!types.includes("Files")) return; // 忽略文本/元素拖拽
+    dragDepth++;
+    dropOverlay.hidden = false;
+  });
+
+  window.addEventListener("dragover", (e) => {
+    e.preventDefault(); // 关键：不阻止默认行为 Chromium 会直接打开被拖文件
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  });
+
+  window.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.hidden = true;
+  });
+
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (files.length) openDroppedFiles(files);
+  });
+
+  async function openDroppedFiles(files) {
+    const paths = [];
+    let skipped = 0;
+    for (const f of files) {
+      if (f.path && hasDraggableExtension(f.path)) {
+        paths.push(f.path);
+      } else {
+        skipped++;
+      }
+    }
+    if (!paths.length) {
+      showError("拖入的文件都不是 Markdown 文档");
+      return;
+    }
+    let firstError = null;
+    for (const p of paths) {
+      const payload = await window.api.readFile(p);
+      if (payload.ok) {
+        openDocument(payload);
+      } else {
+        firstError = firstError || payload.error;
+      }
+    }
+    if (firstError) showError(firstError);
+    if (skipped) showError("已跳过 " + skipped + " 个不支持的文件");
+  }
+
   /* ---------- 打开入口 ---------- */
 
   async function openFileViaDialog() {

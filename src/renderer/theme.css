@@ -422,6 +422,29 @@ body {
   font-size: 14px;
 }
 
+/* ---------- 拖拽打开遮罩（M3-3） ---------- */
+
+#drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--selection-bg);
+  pointer-events: none; /* 不拦截事件，drop 由 window 监听 */
+}
+
+#drop-overlay .drop-box {
+  padding: 22px 46px;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--content-bg);
+  color: var(--accent);
+  font-size: 15px;
+  user-select: none;
+}
+
 /* ---------- 正文（Typora 风格排版） ---------- */
 
 .markdown-body {
