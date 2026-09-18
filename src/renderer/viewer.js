@@ -423,37 +423,23 @@
   }
 
   function openDocument(payload) {
-    /* 打点（M4 定位双击延迟）：syncMs = 解析+净化+mermaid 占位的同步耗时，
-     * paintMs = 双 rAF 后的实际绘制完成（含布局/绘制）。
-     * 与主进程 launcher / resident-resume 行靠墙上时钟串联。 */
-    const t0 = performance.now();
-    const reportOpen = (reused) => {
-      const syncMs = Math.round(performance.now() - t0);
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          try {
-            window.api.sendPhasePerf({
-              phase: "open",
-              at: new Date().toISOString(),
-              syncMs,
-              paintMs: Math.round(performance.now() - t0),
-              contentKB: Math.round((payload.content || "").length / 1024),
-              tabs: tabs.length,
-              reused: !!reused,
-              vendor: deferredState || "idle",
-            });
-          } catch (_) {
-            /* 上报失败不影响功能 */
-          }
-        })
-      );
-    };
-
     addRecent(payload.path); // 所有打开入口统一记最近文件
     const key = String(payload.path).toLowerCase();
     const existing = tabs.find((t) => t.path.toLowerCase() === key);
     if (existing) {
-      // 重复打开：聚焦 + 用新读到的内容重渲染（滚动位置保留）
+      /* 重复打开（双击关联 / 最近文件 / 拖拽）：mtime+size 未变时只聚焦，
+       * 跳过整篇重解析与重渲染 —— 目标机实测这一步 200~470ms，在快速启动器
+       * 已经打掉外部常数之后，它已是双击延迟的主要剩余成本。
+       * 判定口径与外部修改检测（checkExternalChange）一致：内容真的变了才重渲染。 */
+      const unchanged =
+        existing.stat &&
+        payload.stat &&
+        existing.stat.mtimeMs === payload.stat.mtimeMs &&
+        existing.stat.size === payload.stat.size;
+      if (unchanged && existing.display === "dom" && existing.pane) {
+        activateTab(existing.id); // 聚焦 + 恢复滚动 + 刷新大纲
+        return;
+      }
       existing.content = payload.content;
       existing.stat = payload.stat || existing.stat;
       if (existing.display === "dom" && existing.pane) {
@@ -464,7 +450,6 @@
       }
       activateTab(existing.id);
       scheduleSessionSave();
-      reportOpen(true);
       return;
     }
 
@@ -485,8 +470,7 @@
     activateTab(tab.id);
     updateEmptyState();
     scheduleSessionSave();
-    reportOpen(false);
-    reportStartupPerf();
+    loadDeferredVendor(); // 首绘已达成，异步补齐高亮/公式/任务列表
   }
 
   function closeTab(id) {
@@ -1057,7 +1041,7 @@
         updateCurrentHeading();
       }
     }
-    reportStartupPerf();
+    loadDeferredVendor();
   }
 
   window.api.onInitMeta((meta) => {
@@ -1436,27 +1420,6 @@
     }
   });
 
-  /* ---------- 启动性能打点（M4 目标机量化） ----------
-   * scripts：本脚本执行时刻 = 全部 vendor 同步脚本加载完（导航起点为基准）；
-   * firstRender：首个文档（或空状态）渲染完成时刻。首渲染后回报一次，主进程写日志。
-   */
-  const PERF_SCRIPTS = performance.now();
-  let perfReported = false;
-  function reportStartupPerf() {
-    if (perfReported) return;
-    perfReported = true;
-    try {
-      window.api.sendPerf({
-        scripts: Math.round(PERF_SCRIPTS),
-        firstRender: Math.round(performance.now()),
-        tabs: tabs.length,
-      });
-    } catch (_) {
-      /* 上报失败不影响功能 */
-    }
-    loadDeferredVendor(); // 首绘已可达成，异步补齐高亮/公式/任务列表
-  }
-
   /* ---------- vendor 懒加载（M4 启动优化） ----------
    * 目标机实测：5 个 vendor 同步脚本加载占首屏 4.3s/4.8s（磁盘/杀软/CPU 稳态成本）。
    * 首绘后异步补齐其余三个库，全部到位后重建 markdown-it 实例并重渲染，
@@ -1472,7 +1435,6 @@
   function loadDeferredVendor() {
     if (deferredState) return;
     deferredState = "loading";
-    const tStart = performance.now();
     let pending = DEFERRED_VENDOR.length;
     const settle = () => {
       if (--pending > 0) return;
@@ -1483,17 +1445,7 @@
       const active = getActiveTab();
       if (active) activateTab(active.id); // 恢复滚动 + 刷新大纲
       deferredState = "done";
-      // 懒加载库就位后会有一次全量重渲染：这之后内容才算最终形态（含公式/高亮）
-      try {
-        window.api.sendPhasePerf({
-          phase: "deferred",
-          at: new Date().toISOString(),
-          loadMs: Math.round(performance.now() - tStart),
-          tabs: tabs.length,
-        });
-      } catch (_) {
-        /* 上报失败不影响功能 */
-      }
+      // 到这里内容才算最终形态（含公式/高亮/任务列表）
     };
     for (const src of DEFERRED_VENDOR) {
       const s = document.createElement("script");
@@ -1504,8 +1456,8 @@
     }
   }
 
-  // 兜底：无文件且无会话等任何路径都没触发时也要有一次回报
-  setTimeout(reportStartupPerf, 3000);
+  // 兜底：无文件且无会话等任何路径都没触发时也要补齐懒加载库
+  setTimeout(loadDeferredVendor, 3000);
 
   updateEmptyState();
 })();

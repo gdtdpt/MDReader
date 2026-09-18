@@ -19,83 +19,13 @@ const fsp = fs.promises;
 const MD_EXTENSIONS = ["md", "markdown", "mdown", "mkdn", "txt"];
 const MD_FILTER_NAME = "Markdown 文档";
 
-/* ---------- 启动性能打点（M4 目标机量化用） ----------
- * 主进程标记：process 起点即本模块顶层；appReady / windowCreated / firstPaint。
- * 渲染层在首文档（或空状态）渲染完成后经 app:perf 回报 nav 相对耗时，
- * 主进程合并写入 userData/startup-timing.log，每次启动一行。
- */
-const PERF_T0 = Date.now();
-// 进程创建 → 本模块开始执行（Electron 引导：磁盘/杀软/CPU 成本），冷启动与
-// 启动器两条路径都用这个口径，便于横向比较「地板」到底多高
-const PERF_MARKS = { procStartUptimeMs: Math.round(process.uptime() * 1000) };
-function perfMark(name) {
-  PERF_MARKS[name] = Date.now() - PERF_T0;
-}
-
-function perfLogPath() {
-  return path.join(app.getPath("userData"), "startup-timing.log");
-}
-
-/* 同步落盘（进程即将退出/需要立即留证时用）；失败不影响功能 */
-function appendLogLine(obj) {
-  try {
-    fs.appendFileSync(perfLogPath(), JSON.stringify(obj) + "\n");
-  } catch (_) {
-    /* 日志失败不影响功能 */
-  }
-}
-
-/* 单实例启动器自身的启动开销（双击时新起的那个进程）。
- * 托盘常驻能省掉渲染进程冷启，但这一笔是省不掉的「地板」：
- * procBootMs = 进程创建 → 我们的 JS 开始执行（Electron 引导，含磁盘/杀软开销）；
- * launcherAliveMs = 进程总存活（引导 + 握手 + 退出），才是双击延迟里真正的地板。
- * 单独记一行才能判断双击延迟的剩余部分到底花在哪。 */
-function logLauncherBoot() {
-  const at = Date.now();
-  appendLogLine({
-    mode: "launcher",
-    at: new Date(at).toISOString(),
-    t0WallMs: PERF_T0,
-    procBootMs: Math.round(process.uptime() * 1000),
-    launcherBootMs: Date.now() - PERF_T0,
-    argvFiles: extractFilesFromArgv(process.argv).length,
-  });
-  // 退出前再记一行：与上一行相减即本进程总存活时间
-  process.on("exit", () => {
-    appendLogLine({
-      mode: "launcher-exit",
-      at: new Date().toISOString(),
-      wallMs: at,
-      launcherAliveMs: Math.round(process.uptime() * 1000),
-    });
-  });
-}
-
-function appendStartupLog(rendererPerf) {
-  const line = {
-    mode: "cold",
-    time: new Date().toISOString(),
-    // procBootMs 与 launcher 行的同名字段口径一致：进程创建 → JS 执行（Electron 引导开销）
-    // processToReady 是 JS 起点 → ready，两者相加即完整冷启动成本
-    procBootMs: Math.round((PERF_MARKS.procStartUptimeMs || 0)),
-    processToReady: PERF_MARKS.appReady,
-    processToWindow: PERF_MARKS.windowCreated,
-    processToPaint: PERF_MARKS.firstPaint,
-    renderer: rendererPerf || null,
-  };
-  try {
-    fs.appendFile(perfLogPath(), JSON.stringify(line) + "\n", () => {});
-  } catch (_) {
-    /* 日志失败不影响功能 */
-  }
-}
-
-/* 单实例锁：已有实例（含常驻托盘的隐藏窗口）在运行时，本进程只负责把
- * 命令行文件交给它并立刻退出 —— 这一笔启动开销也要记进日志（双击延迟的地板）。
- * 必须放在打点工具之后：logLauncherBoot 依赖 PERF_T0。 */
+/* ---------- 单实例锁 ----------
+ * 已有实例（含常驻托盘的隐藏窗口）在运行时，本进程只负责把命令行文件交给它
+ * 并立刻退出。文件关联现已指向 ~15KB 的原生启动器（MDReaderLauncher.exe），
+ * 这条「启动一个完整 Electron 进程只为转交一个路径」的路径只在
+ * 「未常驻 + 直接双击 .md」时才会走到。 */
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  logLauncherBoot();
   app.quit();
 }
 
@@ -479,26 +409,13 @@ function openerCommandExe() {
 }
 
 /* 启动器消息：`<procBootMs>\n<文件路径>`（UTF-16LE；路径可空 = 只唤出窗口）。
- * procBootMs 由启动器自己用 GetProcessTimes 量，宿主日志里直接可见「这次双击付了
- * 多少映像创建开销」—— 这正是之前任何打点都测不到的那一段。 */
+ * procBootMs 由启动器自己用 GetProcessTimes 度量（进程创建 → 代码执行，也就是
+ * 映像被创建/扫描的那一段），协议保留该字段以便日后诊断，当前不再落盘。 */
 function handleLauncherMessage(buf) {
   const text = buf.toString("utf16le").replace(/\u0000+$/, "");
   const nl = text.indexOf("\n");
-  const bootRaw = nl >= 0 ? text.slice(0, nl) : text;
   const fileRaw = nl >= 0 ? text.slice(nl + 1) : "";
-  const procBootMs = parseInt(bootRaw, 10);
-  const at = Date.now();
-  const wasVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
-  showWindow();
-  appendLogLine({
-    mode: "native-launcher",
-    at: new Date(at).toISOString(),
-    wallMs: at,
-    procBootMs: Number.isFinite(procBootMs) ? procBootMs : null,
-    showMs: Date.now() - at,
-    wasVisible,
-    file: fileRaw || null,
-  });
+  showWindow(); // 常驻态先恢复可见（并收起托盘），再打开文件
   if (fileRaw) openFileFromPath(fileRaw);
 }
 
@@ -510,9 +427,8 @@ function startPipeServer() {
     socket.on("error", () => {});
     socket.on("end", () => handleLauncherMessage(Buffer.concat(chunks)));
   });
-  pipeServer.on("error", (err) => {
-    // 监听失败不致命：启动器连不上会自行退回冷启动，只是没享受到加速
-    appendLogLine({ mode: "pipe-error", at: new Date().toISOString(), error: err.message });
+  pipeServer.on("error", () => {
+    // 监听失败不致命：启动器连不上会自行退回冷启动（拉起 MDReader.exe），只是没享受到加速
   });
   pipeServer.listen(PIPE_NAME);
 }
@@ -566,7 +482,6 @@ function createWindow() {
   });
 
   mainWindow.once("ready-to-show", () => {
-    perfMark("firstPaint");
     mainWindow.show();
   });
 
@@ -762,24 +677,6 @@ function registerIpc() {
     }
   });
 
-  // 渲染层启动性能回报 → 合并写日志（每次启动一行）。
-  // 延迟 1.5s 落盘：等 ready-to-show（首次绘制）打点到位，避免字段缺失
-  ipcMain.on("app:perf", (_event, data) => {
-    const perf = data && typeof data === "object"
-      ? { scripts: data.scripts, firstRender: data.firstRender, tabs: data.tabs }
-      : null;
-    setTimeout(() => appendStartupLog(perf), 1500);
-  });
-
-  // 渲染层阶段打点（打开文档 / 懒加载库就位）：原样落盘，mode 取 phase 名。
-  // 与 launcher / resident-resume 行靠墙上时钟串联，用于定位双击延迟归属
-  ipcMain.on("app:phase-perf", (_event, data) => {
-    if (!data || typeof data !== "object") return;
-    const line = Object.assign({}, data, { mode: data.phase || "phase" });
-    delete line.phase;
-    appendLogLine(line);
-  });
-
   // 无边框窗口控制（自绘标题栏用）
   ipcMain.on("win:minimize", () => {
     if (mainWindow) mainWindow.minimize();
@@ -807,31 +704,15 @@ function registerIpc() {
 /* ---------- 生命周期 ---------- */
 
 app.whenReady().then(() => {
-  perfMark("appReady");
   registerIpc();
   buildMenu();
   startPipeServer(); // 快速启动器的落点：窗口还没建就先听着，避免早到的双击落空
   createWindow();
-  perfMark("windowCreated");
 
   app.on("second-instance", (_event, argv) => {
-    // 常驻托盘时窗口是隐藏的：先恢复可见（并收起托盘），再打开文件。
-    // 这里落盘一行「唤起」打点：与 launcher 行的 t0WallMs 相减即双击→窗口可见的净耗时
-    const at = Date.now();
-    const wasVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
-    const tShow = Date.now();
+    // 常驻托盘时窗口是隐藏的：先恢复可见（并收起托盘），再打开文件
     showWindow();
-    const showMs = Date.now() - tShow;
-    const argvFiles = extractFilesFromArgv(argv).length;
     openFromArgv(argv);
-    appendLogLine({
-      mode: "resident-resume",
-      at: new Date().toISOString(),
-      wallMs: at,
-      showMs,
-      argvFiles,
-      wasVisible,
-    });
   });
 
   app.on("before-quit", () => {
