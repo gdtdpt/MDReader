@@ -32,6 +32,33 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
+   * 查询文件 stat（外部修改检测：mtime + size 比对）。
+   * @param {string} filePath
+   * @returns {Promise<{ok: boolean, mtimeMs?: number, size?: number, error?: string}>}
+   */
+  statFile(filePath) {
+    return ipcRenderer.invoke("file:stat", filePath);
+  },
+
+  /**
+   * 将 .md/.markdown 注册为 MDReader 打开（HKCU，已有关联时主进程弹确认）。
+   * @returns {Promise<{ok: boolean, message: string}>}
+   */
+  setDefaultOpener() {
+    return ipcRenderer.invoke("app:set-default-opener");
+  },
+
+  /**
+   * 订阅启动元信息（渲染层据此决定是否恢复上次会话）。
+   * @param {(meta: {hasStartupFiles: boolean}) => void} callback
+   */
+  onInitMeta(callback) {
+    const wrapped = (_event, meta) => callback(meta);
+    ipcRenderer.once("app:init-meta", wrapped);
+    return () => ipcRenderer.removeListener("app:init-meta", wrapped);
+  },
+
+  /**
    * 订阅主进程推送的标签页命令（菜单加速器：关闭/切换）。
    * @param {("close"|"next"|"prev") => void} callback
    */

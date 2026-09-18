@@ -1,6 +1,7 @@
 "use strict";
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme } = require("electron");
+const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const fsp = fs.promises;
@@ -39,7 +40,13 @@ async function readMarkdownFile(filePath) {
       return { ok: false, error: "文件超过 5MB，暂不支持" };
     }
     const content = await fsp.readFile(resolved, "utf8");
-    return { ok: true, path: resolved, content };
+    // stat 信息随载荷返回：渲染层用于外部修改检测（mtime+size 比对）
+    return {
+      ok: true,
+      path: resolved,
+      content,
+      stat: { mtimeMs: stat.mtimeMs, size: stat.size },
+    };
   } catch (err) {
     return { ok: false, error: "读取失败：" + err.message };
   }
@@ -102,6 +109,94 @@ async function openFromArgv(argv) {
   }
 }
 
+/* ---------- 默认打开方式（M3-4，验收挂 M4 打包后） ----------
+ * HKCU\Software\Classes 写 ProgID + 扩展名重定向，免管理员权限；
+ * 已有关联时先弹确认框，绝不静默抢默认（Win8+ 也不允许写 UserChoice 哈希键）。
+ */
+
+const OPENER_PROG_ID = "MDReader.md";
+const OPENER_EXTENSIONS = [".md", ".markdown"]; // .txt 等不抢，避免误伤记事本习惯
+
+function regQueryDefault(keyPath) {
+  return new Promise((resolve) => {
+    execFile("reg", ["query", keyPath, "/ve"], { windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null); // 键不存在 → 视为无关联
+      const m = /REG_SZ\s+(.*)/i.exec(stdout || "");
+      resolve(m ? m[1].trim() : "");
+    });
+  });
+}
+
+function regAdd(args) {
+  return new Promise((resolve, reject) => {
+    execFile("reg", ["add", ...args], { windowsHide: true }, (err) =>
+      err ? reject(err) : resolve()
+    );
+  });
+}
+
+async function setDefaultOpener() {
+  const exePath = process.execPath; // 打包后即 MDReader.exe，开发期为 electron.exe
+  try {
+    const current =
+      (await regQueryDefault("HKCU\\Software\\Classes\\.md")) ||
+      (await regQueryDefault("HKCR\\.md"));
+    if (current && current !== OPENER_PROG_ID) {
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: "question",
+        title: "设为默认打开方式",
+        message: "检测到 .md 当前关联到：" + current,
+        detail:
+          "是否改为用 MDReader 打开？仅修改当前用户设置，可随时在系统设置中改回。",
+        buttons: ["改为 MDReader", "取消"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (choice !== 0) {
+        return { ok: false, message: "已取消" };
+      }
+    }
+    await regAdd([
+      "HKCU\\Software\\Classes\\" + OPENER_PROG_ID,
+      "/ve",
+      "/d",
+      "Markdown 文档 (MDReader)",
+      "/f",
+    ]);
+    await regAdd([
+      "HKCU\\Software\\Classes\\" + OPENER_PROG_ID + "\\DefaultIcon",
+      "/ve",
+      "/d",
+      exePath + ",0",
+      "/f",
+    ]);
+    await regAdd([
+      "HKCU\\Software\\Classes\\" + OPENER_PROG_ID + "\\shell\\open\\command",
+      "/ve",
+      "/d",
+      '"' + exePath + '" "%1"',
+      "/f",
+    ]);
+    for (const ext of OPENER_EXTENSIONS) {
+      await regAdd(["HKCU\\Software\\Classes\\" + ext, "/ve", "/d", OPENER_PROG_ID, "/f"]);
+    }
+    return { ok: true, message: "已将 .md / .markdown 关联到 MDReader" };
+  } catch (err) {
+    return { ok: false, message: "注册失败：" + err.message };
+  }
+}
+
+/* ---------- 文件 stat（外部修改检测用） ---------- */
+
+async function statFile(filePath) {
+  try {
+    const stat = await fsp.stat(filePath);
+    return { ok: true, mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 /* ---------- 窗口 ---------- */
 
 function createWindow() {
@@ -143,6 +238,20 @@ function createWindow() {
 
   // 开发期保留 DevTools 快捷键；打包后由菜单模板控制
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+
+  // 页面就绪后：先推启动元信息（渲染层据此决定是否恢复会话），
+  // 再处理初始命令行文件（修复此前端口：仅 second-instance 处理过 argv）
+  let startupArgvDone = false;
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (startupArgvDone) return; // reload 时不重复推启动文件
+    startupArgvDone = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("app:init-meta", {
+        hasStartupFiles: extractFilesFromArgv(process.argv).length > 0,
+      });
+    }
+    openFromArgv(process.argv);
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -214,6 +323,12 @@ function registerIpc() {
   });
   ipcMain.handle("file:read", (_event, filePath) => {
     return readMarkdownFile(filePath);
+  });
+  ipcMain.handle("file:stat", (_event, filePath) => {
+    return statFile(filePath);
+  });
+  ipcMain.handle("app:set-default-opener", () => {
+    return setDefaultOpener();
   });
 
   // 无边框窗口控制（自绘标题栏用）

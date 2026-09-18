@@ -177,6 +177,19 @@ body {
   background: var(--hover-active);
 }
 
+/* 禁用态（如重置字号在未缩放时）：变暗且不响应 */
+#toolbar button:disabled {
+  opacity: 0.35;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+#toolbar button:disabled:hover,
+#toolbar button:disabled:active {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 /* 大纲开关激活态：常驻底色 + 强调色图标 */
 #toolbar button.on {
   background: var(--hover-bg);
@@ -188,6 +201,105 @@ body {
   height: 16px;
   margin: 0 6px;
   background: var(--border);
+}
+
+/* ---------- 「···」下拉菜单（M3-4，Typora 低调风格） ---------- */
+
+#more-menu {
+  position: fixed;
+  /* 位置由 JS 动态计算：对齐 tb-more 按钮正下方 */
+  z-index: 90;
+  min-width: 260px;
+  max-width: 360px;
+  padding: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--content-bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  user-select: none;
+}
+
+.menu-label {
+  padding: 6px 14px 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.menu-item {
+  padding: 6px 14px;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.menu-item:hover {
+  background: var(--hover-bg);
+}
+
+.recent-item {
+  color: var(--text);
+}
+
+.recent-item .recent-path {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.menu-empty {
+  padding: 6px 14px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 5px 0;
+  background: var(--border);
+}
+
+/* ---------- 外部修改提示条（M3-4） ---------- */
+
+#modified-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px auto;
+  max-width: var(--content-max);
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+#modified-banner .banner-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+#modified-banner button {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--content-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+#modified-banner button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ---------- Tab 栏（M3-1，Typora/VS Code 低调风格） ---------- */
@@ -443,6 +555,13 @@ body {
   color: var(--accent);
   font-size: 15px;
   user-select: none;
+}
+
+/* 错误提示（.info 变体：成功/中性通知，M3-4 默认打开方式结果反馈） */
+#error-banner.info {
+  border-color: var(--border);
+  background: var(--code-bg);
+  color: var(--text);
 }
 
 /* ---------- 正文（Typora 风格排版） ---------- */

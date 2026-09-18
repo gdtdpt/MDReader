@@ -24,6 +24,13 @@
   const outlineEl = document.getElementById("outline");
   const outlineListEl = document.getElementById("outline-list");
   const tbOutline = document.getElementById("tb-outline");
+  const tbMore = document.getElementById("tb-more");
+  const moreMenu = document.getElementById("more-menu");
+  const recentListEl = document.getElementById("recent-list");
+  const modifiedBanner = document.getElementById("modified-banner");
+  const modifiedText = document.getElementById("modified-text");
+  const modifiedReload = document.getElementById("modified-reload");
+  const modifiedIgnore = document.getElementById("modified-ignore");
 
   const MAX_DOM_TABS = 10;
 
@@ -185,13 +192,18 @@
 
   let errorTimer = null;
 
-  function showError(message) {
+  function showNotice(message, ok) {
     errorEl.textContent = message;
+    errorEl.classList.toggle("info", !!ok);
     errorEl.hidden = false;
     clearTimeout(errorTimer);
     errorTimer = setTimeout(() => {
       errorEl.hidden = true;
-    }, 4000);
+    }, ok ? 3000 : 4000);
+  }
+
+  function showError(message) {
+    showNotice(message, false);
   }
 
   function basename(p) {
@@ -381,14 +393,19 @@
     titlebarFilename.textContent = target.title;
     updateTabbar();
     renderOutline(); // 侧栏联动活动 tab
+    hideModifiedBanner(); // 提示条属于上一个 tab 的上下文
+    checkExternalChange(target);
+    scheduleSessionSave();
   }
 
   function openDocument(payload) {
+    addRecent(payload.path); // 所有打开入口统一记最近文件
     const key = String(payload.path).toLowerCase();
     const existing = tabs.find((t) => t.path.toLowerCase() === key);
     if (existing) {
       // 重复打开：聚焦 + 用新读到的内容重渲染（滚动位置保留）
       existing.content = payload.content;
+      existing.stat = payload.stat || existing.stat;
       if (existing.display === "dom" && existing.pane) {
         renderDocument(existing);
         existing.pane.classList.add("active");
@@ -396,6 +413,7 @@
         existing.html = null; // 下次激活全量重渲染
       }
       activateTab(existing.id);
+      scheduleSessionSave();
       return;
     }
 
@@ -404,6 +422,7 @@
       path: payload.path,
       title: basename(payload.path),
       content: payload.content,
+      stat: payload.stat || null,
       display: "cached",
       html: null,
       pane: null,
@@ -414,6 +433,7 @@
     renderDocument(tab);
     activateTab(tab.id);
     updateEmptyState();
+    scheduleSessionSave();
   }
 
   function closeTab(id) {
@@ -422,6 +442,8 @@
     const tab = tabs[idx];
     if (tab.pane) tab.pane.remove();
     tabs.splice(idx, 1);
+    if (modifiedTabId === id) hideModifiedBanner();
+    scheduleSessionSave();
 
     if (activeTabId === id) {
       activeTabId = null;
@@ -433,6 +455,7 @@
         viewerEl.scrollTop = 0;
         updateEmptyState();
         updateTabbar();
+        renderOutline();
       }
     } else {
       updateTabbar();
@@ -524,6 +547,7 @@
   viewerEl.addEventListener("scroll", () => {
     const tab = getActiveTab();
     if (tab) tab.scrollTop = viewerEl.scrollTop;
+    scheduleSessionSave();
     if (spyScheduled) return;
     spyScheduled = true;
     requestAnimationFrame(updateCurrentHeading);
@@ -609,6 +633,251 @@
     if (skipped) showError("已跳过 " + skipped + " 个不支持的文件");
   }
 
+  /* ---------- 「···」菜单 + 最近文件（M3-4） ---------- */
+
+  const RECENTS_KEY = "mdreader.recents";
+  const RECENTS_MAX = 10;
+  let recents = loadRecents();
+
+  function loadRecents() {
+    try {
+      const v = JSON.parse(localStorage.getItem(RECENTS_KEY));
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveRecents() {
+    try {
+      localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
+    } catch (_) {
+      /* 持久化失败不影响使用 */
+    }
+  }
+
+  function addRecent(p) {
+    const key = String(p).toLowerCase();
+    recents = [p, ...recents.filter((x) => x.toLowerCase() !== key)].slice(0, RECENTS_MAX);
+    saveRecents();
+  }
+
+  function removeRecent(p) {
+    const key = String(p).toLowerCase();
+    recents = recents.filter((x) => x.toLowerCase() !== key);
+    saveRecents();
+  }
+
+  function renderMoreMenu() {
+    recentListEl.textContent = "";
+    if (!recents.length) {
+      const d = document.createElement("div");
+      d.className = "menu-empty";
+      d.textContent = "无最近文件";
+      recentListEl.appendChild(d);
+      return;
+    }
+    for (const p of recents) {
+      const item = document.createElement("div");
+      item.className = "menu-item recent-item";
+      item.textContent = basename(p);
+      item.title = p;
+      item.addEventListener("click", () => {
+        hideMoreMenu();
+        openRecentFile(p);
+      });
+      recentListEl.appendChild(item);
+    }
+  }
+
+  async function openRecentFile(p) {
+    const payload = await window.api.readFile(p);
+    if (payload.ok) {
+      openDocument(payload);
+    } else {
+      removeRecent(p); // 失效条目直接清掉，避免反复踩错
+      showError(payload.error);
+    }
+  }
+
+  function hideMoreMenu() {
+    moreMenu.hidden = true;
+  }
+
+  function showMoreMenu() {
+    renderMoreMenu();
+    moreMenu.hidden = false; // 先显示才有几何信息可量，同帧定位不闪烁
+    // 菜单左缘对齐按钮左缘、贴按钮下方 4px；越出视口右缘时右移收进来
+    const rect = tbMore.getBoundingClientRect();
+    const menuWidth = moreMenu.offsetWidth || 260;
+    const left = Math.min(rect.left, window.innerWidth - menuWidth - 8);
+    moreMenu.style.left = Math.max(8, left) + "px";
+    moreMenu.style.top = rect.bottom + 4 + "px";
+  }
+
+  tbMore.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (moreMenu.hidden) {
+      showMoreMenu();
+    } else {
+      hideMoreMenu();
+    }
+  });
+
+  // 点击菜单外部关闭
+  document.addEventListener("click", (e) => {
+    if (!moreMenu.hidden && !moreMenu.contains(e.target)) hideMoreMenu();
+  });
+
+  document.getElementById("menu-clear-recents").addEventListener("click", () => {
+    recents = [];
+    saveRecents();
+    renderMoreMenu();
+    hideMoreMenu();
+  });
+
+  document.getElementById("menu-default-opener").addEventListener("click", async () => {
+    hideMoreMenu();
+    const result = await window.api.setDefaultOpener();
+    showNotice(result.message, result.ok);
+  });
+
+  /* ---------- 会话恢复（M3-4）：tab 路径 + 滚动位置 ---------- */
+
+  const SESSION_KEY = "mdreader.session";
+  let sessionTimer = null;
+  let hasStartupFiles = false;
+
+  function scheduleSessionSave() {
+    clearTimeout(sessionTimer);
+    sessionTimer = setTimeout(saveSession, 500);
+  }
+
+  function saveSession() {
+    try {
+      if (tabs.length === 0) {
+        localStorage.removeItem(SESSION_KEY);
+        return;
+      }
+      const data = {
+        tabs: tabs.map((t) => ({ path: t.path, scrollTop: t.scrollTop || 0 })),
+        active: tabs.findIndex((t) => t.id === activeTabId),
+      };
+      localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+    } catch (_) {
+      /* 持久化失败不影响使用 */
+    }
+  }
+
+  /* 空启动时恢复上次会话；显式打开（命令行/关联/拖拽）不叠加恢复 */
+  async function restoreSession() {
+    if (hasStartupFiles || tabs.length > 0) return;
+    let data = null;
+    try {
+      data = JSON.parse(localStorage.getItem(SESSION_KEY));
+    } catch (_) {
+      return;
+    }
+    if (!data || !Array.isArray(data.tabs) || !data.tabs.length) return;
+
+    for (const entry of data.tabs) {
+      if (!entry || typeof entry.path !== "string") continue;
+      const payload = await window.api.readFile(entry.path);
+      if (!payload.ok) continue; // 已删除/读失败：静默跳过
+      openDocument(payload);
+      const opened = tabs.find(
+        (t) => t.path.toLowerCase() === entry.path.toLowerCase()
+      );
+      if (opened && typeof entry.scrollTop === "number") {
+        opened.scrollTop = entry.scrollTop;
+      }
+    }
+    // 激活上次的活动 tab 并还原滚动位置
+    const idx = typeof data.active === "number" ? data.active : -1;
+    const activeEntry = idx >= 0 ? data.tabs[idx] : null;
+    if (activeEntry) {
+      const t = tabs.find(
+        (x) => x.path.toLowerCase() === activeEntry.path.toLowerCase()
+      );
+      if (t) {
+        activateTab(t.id);
+        viewerEl.scrollTop = t.scrollTop || 0;
+        updateCurrentHeading();
+      }
+    }
+  }
+
+  window.api.onInitMeta((meta) => {
+    hasStartupFiles = !!(meta && meta.hasStartupFiles);
+  });
+  // 元信息在 did-finish-load 即达，稍等一拍再尝试恢复（显式打开会先行占位）
+  setTimeout(restoreSession, 300);
+
+  /* ---------- 文件外部修改检测（M3-4）：激活/聚焦时 stat 比对 ---------- */
+
+  let modifiedTabId = null;
+  let modifiedStat = null;
+
+  function hideModifiedBanner() {
+    modifiedTabId = null;
+    modifiedStat = null;
+    modifiedBanner.hidden = true;
+  }
+
+  function showModifiedBanner(tab, stat) {
+    modifiedTabId = tab.id;
+    modifiedStat = stat;
+    modifiedText.textContent = "「" + tab.title + "」已被外部修改";
+    modifiedBanner.hidden = false;
+  }
+
+  async function checkExternalChange(tab) {
+    if (!tab || !tab.path) return;
+    const result = await window.api.statFile(tab.path);
+    if (!result.ok) return; // 文件被删等异常：不干扰阅读
+    if (!tab.stat) {
+      tab.stat = result; // 旧会话/无基线：先建立基线
+      return;
+    }
+    if (
+      result.mtimeMs !== tab.stat.mtimeMs ||
+      result.size !== tab.stat.size
+    ) {
+      if (tab.id === activeTabId) showModifiedBanner(tab, result);
+    }
+  }
+
+  modifiedReload.addEventListener("click", async () => {
+    const tab = getTab(modifiedTabId);
+    hideModifiedBanner();
+    if (!tab) return;
+    const payload = await window.api.readFile(tab.path);
+    if (!payload.ok) {
+      showError(payload.error);
+      return;
+    }
+    const st = viewerEl.scrollTop; // 重载保持滚动位置
+    tab.content = payload.content;
+    tab.stat = payload.stat;
+    renderDocument(tab);
+    viewerEl.scrollTop = st;
+    renderOutline();
+    showNotice("已重新加载 " + tab.title, true);
+  });
+
+  modifiedIgnore.addEventListener("click", () => {
+    // 忽略 = 以当前磁盘状态为新基线
+    const tab = getTab(modifiedTabId);
+    if (tab && modifiedStat) tab.stat = modifiedStat;
+    hideModifiedBanner();
+  });
+
+  // 应用窗口重新聚焦时也检查活动 tab
+  window.addEventListener("focus", () => {
+    const tab = getActiveTab();
+    if (tab) checkExternalChange(tab);
+  });
+
   /* ---------- 打开入口 ---------- */
 
   async function openFileViaDialog() {
@@ -650,25 +919,31 @@
     openFileViaDialog().catch((err) => showError(String(err)));
   });
 
+  const tbZoomOut = document.getElementById("tb-zoom-out");
+  const tbZoomReset = document.getElementById("tb-zoom-reset");
+  const tbZoomIn = document.getElementById("tb-zoom-in");
+
   function applyFontFactor() {
     document.documentElement.style.setProperty(
       "--content-zoom",
       16 * fontFactor + "px"
     );
+    // 缩放未偏离原值时，重置按钮无意义 → 禁用
+    tbZoomReset.disabled = fontFactor === 1;
   }
 
   let fontFactor = 1;
   applyFontFactor();
 
-  document.getElementById("tb-zoom-in").addEventListener("click", () => {
+  tbZoomIn.addEventListener("click", () => {
     fontFactor = Math.min(2, Math.round((fontFactor + 0.1) * 10) / 10);
     applyFontFactor();
   });
-  document.getElementById("tb-zoom-out").addEventListener("click", () => {
+  tbZoomOut.addEventListener("click", () => {
     fontFactor = Math.max(0.6, Math.round((fontFactor - 0.1) * 10) / 10);
     applyFontFactor();
   });
-  document.getElementById("tb-zoom-reset").addEventListener("click", () => {
+  tbZoomReset.addEventListener("click", () => {
     fontFactor = 1;
     applyFontFactor();
   });

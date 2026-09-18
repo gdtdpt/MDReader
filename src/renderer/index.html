@@ -44,7 +44,7 @@
       <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M10.5 10.5L14 14M5 7h4" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
     </button>
     <button id="tb-zoom-reset" type="button" title="重置字号" tabindex="-1">
-      <svg width="15" height="15" viewBox="0 0 16 16"><path d="M3 13L7 3h2l4 10M4.8 9.5h6.4" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg width="15" height="15" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3v5h5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <button id="tb-zoom-in" type="button" title="放大字号" tabindex="-1">
       <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M10.5 10.5L14 14M5 7h4M7 5v4" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
@@ -55,6 +55,20 @@
       <svg class="theme-dark" width="15" height="15" viewBox="0 0 16 16" hidden><path d="M13.5 9.7A6 6 0 116.3 2.5a4.8 4.8 0 007.2 7.2z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linejoin="round"/></svg>
       <svg class="theme-system" width="15" height="15" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5.5 14h5M8 11.5V14" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
     </button>
+    <span class="tb-sep"></span>
+    <button id="tb-more" type="button" title="更多" tabindex="-1">
+      <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="13" cy="8" r="1.3" fill="currentColor"/></svg>
+    </button>
+  </div>
+
+  <!-- 「···」下拉菜单（M3-4）：最近文件 + 设为默认打开方式 -->
+  <div id="more-menu" hidden>
+    <div class="menu-label">最近打开</div>
+    <div id="recent-list"></div>
+    <div class="menu-sep"></div>
+    <div class="menu-item" id="menu-clear-recents" tabindex="-1">清空最近文件</div>
+    <div class="menu-sep"></div>
+    <div class="menu-item" id="menu-default-opener" tabindex="-1">设为默认打开方式 (.md)</div>
   </div>
 
   <!-- 主内容区：左侧大纲侧栏（M3-2，可收起）+ 右侧 tab/正文列 -->
@@ -74,6 +88,14 @@
           <h1>MDReader</h1>
           <p>按 <kbd>Ctrl</kbd> + <kbd>O</kbd> 打开 Markdown 文档</p>
           <button id="btn-open" type="button">选择文件...</button>
+        </div>
+        <!-- 文件被外部修改提示条（M3-4）：sticky 于正文区顶部 -->
+        <div id="modified-banner" hidden>
+          <span id="modified-text"></span>
+          <span class="banner-actions">
+            <button id="modified-reload" type="button" tabindex="-1">重新加载</button>
+            <button id="modified-ignore" type="button" tabindex="-1">忽略</button>
+          </span>
         </div>
         <div id="panes"></div>
         <div id="error-banner" hidden></div>
