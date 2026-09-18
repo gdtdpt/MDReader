@@ -9,11 +9,13 @@ const {
   nativeTheme,
   Tray,
   nativeImage,
+  clipboard,
 } = require("electron");
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
+const { fileURLToPath } = require("url");
 const fsp = fs.promises;
 
 const MD_EXTENSIONS = ["md", "markdown", "mdown", "mkdn", "txt"];
@@ -197,6 +199,33 @@ function hasMdExtension(p) {
   return MD_EXTENSIONS.includes(path.extname(p).slice(1).toLowerCase());
 }
 
+/* 文本编码探测（批次 1）
+ * 内网文档里「记事本另存为 ANSI」写出来的中文 .md 很常见，此前硬编码 utf8
+ * 读它们会整篇乱码 —— 在 VSCode/Typora 里正常、在这里乱码，用户只会认为
+ * 是本应用坏了。顺序：BOM 优先（BOM 是权威声明，不猜）→ 无 BOM 时用
+ * fatal 模式严格试解 UTF-8（能解出来就是 UTF-8，解不出说明不是）→ 回退 GB18030。
+ * 只做这一种回退：多一种猜测就多一类误判，中文内网环境 GB18030 已覆盖 GBK/GB2312；
+ * Electron 22 内置全量 ICU，TextDecoder 支持 gb18030，零新增依赖。 */
+function decodeText(buf) {
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return { text: buf.slice(3).toString("utf8"), encoding: "utf-8" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return { text: new TextDecoder("utf-16le").decode(buf.slice(2)), encoding: "utf-16le" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return { text: new TextDecoder("utf-16be").decode(buf.slice(2)), encoding: "utf-16be" };
+  }
+  try {
+    return {
+      text: new TextDecoder("utf-8", { fatal: true }).decode(buf),
+      encoding: "utf-8",
+    };
+  } catch (_) {
+    return { text: new TextDecoder("gb18030").decode(buf), encoding: "gb18030" };
+  }
+}
+
 async function readMarkdownFile(filePath) {
   if (!filePath || typeof filePath !== "string") {
     return { ok: false, error: "无效的文件路径" };
@@ -214,12 +243,14 @@ async function readMarkdownFile(filePath) {
     if (stat.size > 5 * 1024 * 1024) {
       return { ok: false, error: "文件超过 5MB，暂不支持" };
     }
-    const content = await fsp.readFile(resolved, "utf8");
-    // stat 信息随载荷返回：渲染层用于外部修改检测（mtime+size 比对）
+    const { text, encoding } = decodeText(await fsp.readFile(resolved));
+    // stat 信息随载荷返回：渲染层用于外部修改检测（mtime+size 比对）；
+    // encoding 非 utf-8 时渲染层会提示一次「已按 xx 解码」，避免用户误以为乱码是 bug
     return {
       ok: true,
       path: resolved,
-      content,
+      content: text,
+      encoding,
       stat: { mtimeMs: stat.mtimeMs, size: stat.size },
     };
   } catch (err) {
@@ -288,6 +319,89 @@ async function openFromArgv(argv) {
       pushOpenFile(file);
     }
   }
+}
+
+/* ---------- 文档内链接（批次 1，Heinrich 定方案） ----------
+ * 正文里的 <a href> 此前完全没有处理，点击会走 Chromium 默认导航 —— 相对路径
+ * 会把整个窗口顶掉（无边框外壳、标题栏、tab 栏一起消失），外链则是打不开的
+ * 错误页。渲染层已把<a>点击全部接管（preventDefault + 委托），这里是落点。
+ *
+ * 分流（内网脱机环境，能做的事很少，能做的事做干净）：
+ *   ① 外链 / 未知协议 → 一律不进文件系统，复制到剪贴板（用户自己贴到能上网的机器）
+ *   ② file: 协议 → 还原成本地路径，按 ③④ 继续处理
+ *   ③ 本地 md 家族且存在 → 复用 openFileFromPath()（自动获得「同文件聚焦已有 tab」）
+ *   ④ 非 md（图片/PDF/压缩包等）或文件不存在 → 复制绝对路径
+ * 返回 {action, text|message}，提示文案由渲染层组装（应用内提示条只认文本）。 */
+
+const HREF_PROTOCOL_RE = /^([a-z][a-z0-9+.-]*):/i;
+
+/* 取出 href 的协议名；单字母「协议」其实是 Windows 盘符（C:\docs\a.md），不算协议 */
+function hrefProtocol(href) {
+  const m = HREF_PROTOCOL_RE.exec(href);
+  if (!m) return "";
+  return m[1].length === 1 ? "" : m[1].toLowerCase();
+}
+
+/* href → 绝对路径（与渲染层图片解析同口径：盘符开头 / 根相对 / 相对文档目录） */
+function resolveHrefPath(basePath, href) {
+  if (/^[a-zA-Z]:[\\/]/.test(href) || href.startsWith("\\\\")) {
+    return path.resolve(href); // 已是绝对路径（含 UNC）
+  }
+  if (href.startsWith("/") || href.startsWith("\\")) {
+    return path.resolve((String(basePath).slice(0, 2) || "C:") + href); // 根相对：挂文档所在盘符
+  }
+  return path.resolve(path.dirname(String(basePath)), href);
+}
+
+async function followLink(basePath, href) {
+  if (typeof href !== "string" || !href.trim()) {
+    return { action: "error", message: "链接为空" };
+  }
+  const raw = href.trim();
+
+  // ① 外链 / 未知协议：不进 fs（javascript: 等已被 DOMPurify 拦掉，这里再兜一层）
+  const proto = hrefProtocol(raw);
+  if (proto && proto !== "file") {
+    clipboard.writeText(raw);
+    return { action: "external", text: raw };
+  }
+
+  // ② file: 协议还原成本地路径；还原失败（畸形 URL）就按外链复制
+  let local = raw;
+  if (proto === "file") {
+    try {
+      local = fileURLToPath(raw);
+    } catch (_) {
+      clipboard.writeText(raw);
+      return { action: "external", text: raw };
+    }
+  }
+  local = local.split("#")[0].split("?")[0]; // 锚点/查询串不参与路径解析
+  try {
+    local = decodeURIComponent(local); // 源里可能已写成 %20 转义
+  } catch (_) {
+    /* 含非法转义序列时按原样处理 */
+  }
+  if (!local) return { action: "error", message: "链接为空" };
+
+  const abs = resolveHrefPath(basePath, local);
+
+  let stat = null;
+  try {
+    stat = await fsp.stat(abs);
+  } catch (_) {
+    stat = null;
+  }
+  if (!stat || !stat.isFile()) {
+    clipboard.writeText(abs);
+    return { action: "missing", text: abs };
+  }
+  if (hasMdExtension(abs)) {
+    await openFileFromPath(abs); // 统一出口：读失败会走 app:open-error 提示条
+    return { action: "opened", text: abs };
+  }
+  clipboard.writeText(abs); // 非 md：阅读器不管，交出路径让用户自行处理
+  return { action: "copied", text: abs };
 }
 
 /* ---------- 默认打开方式（M3-4，验收挂 M4 打包后） ----------
@@ -488,6 +602,16 @@ function createWindow() {
   // 原生菜单彻底隐藏（操作走自绘工具栏）；菜单加速键仍全局生效
   mainWindow.setMenuBarVisibility(false);
 
+  /* 导航守卫（批次 1）：内网脱机阅读器没有任何理由让页面导航离开自身。
+   * 渲染层已接管正文里的 <a> 点击，这里是兜底 —— 任何漏网的导航都会把整个
+   * 窗口顶掉（无边框外壳/标题栏/tab 栏一起消失），target="_blank" 更会开出一个
+   * 没有 preload 的裸窗口。一律阻断；同 URL 放行，避免误伤手动 reload。 */
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const current = mainWindow ? mainWindow.webContents.getURL() : "";
+    if (url !== current) event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
   // 最大化状态推送给渲染层，用于切换标题栏按钮图标
   const sendMaximized = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -641,6 +765,10 @@ function registerIpc() {
   });
   ipcMain.handle("file:stat", (_event, filePath) => {
     return statFile(filePath);
+  });
+  // 文档内链接（批次 1）：外链 / 非 md 目标复制到剪贴板，md 目标走统一打开出口
+  ipcMain.handle("link:follow", (_event, basePath, href) => {
+    return followLink(basePath, href);
   });
   ipcMain.handle("opener:check", () => {
     return checkDefaultOpener();

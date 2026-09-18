@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-// 最小暴露面：仅三个通道，不泄漏 ipcRenderer 与 Node 能力
+// 最小暴露面：只暴露具名方法与订阅入口，不泄漏 ipcRenderer 与任何 Node 能力
 contextBridge.exposeInMainWorld("api", {
   /**
    * 打开文件选择对话框。
@@ -15,10 +15,22 @@ contextBridge.exposeInMainWorld("api", {
   /**
    * 读取本地 Markdown 文件。
    * @param {string} filePath
-   * @returns {Promise<{ok: boolean, path?: string, content?: string, error?: string}>}
+   * @returns {Promise<{ok: boolean, path?: string, content?: string, encoding?: string, stat?: object, error?: string}>}
+   *   encoding 为探测出的文本编码（utf-8 / utf-16le / utf-16be / gb18030）
    */
   readFile(filePath) {
     return ipcRenderer.invoke("file:read", filePath);
+  },
+
+  /**
+   * 跟随文档内链接（批次 1）。主进程按 href 分流：外链与非 md 目标写入剪贴板，
+   * md 目标复用统一打开出口（同文件聚焦已有 tab）。页内 `#锚点` 不走这里。
+   * @param {string} basePath 当前文档的绝对路径（相对链接的解析基准）
+   * @param {string} href 正文里的原始 href
+   * @returns {Promise<{action: "opened"|"external"|"copied"|"missing"|"error", text?: string, message?: string}>}
+   */
+  followLink(basePath, href) {
+    return ipcRenderer.invoke("link:follow", basePath, href);
   },
 
   /**

@@ -233,6 +233,20 @@
     return String(p).split(/[\\/]/).pop();
   }
 
+  /* 非 UTF-8 文档解码提示（批次 1）：让用户知道「中文没乱」是因为自动认了编码，
+   * 而不是怀疑文件被改过或内容缺失。UTF-8（含 BOM）是绝大多数情况，不打扰。 */
+  const ENCODING_LABELS = {
+    gb18030: "GB18030/GBK",
+    "utf-16le": "UTF-16LE",
+    "utf-16be": "UTF-16BE",
+  };
+
+  function notifyEncoding(payload) {
+    const enc = payload && payload.encoding;
+    if (!enc || enc === "utf-8") return;
+    showNotice("已按 " + (ENCODING_LABELS[enc] || enc) + " 解码该文档", true);
+  }
+
   /* ---------- 相对路径图片解析（M2-2） ---------- */
 
   function docDir(docPath) {
@@ -287,6 +301,19 @@
     });
   }
 
+  /* 外链点击是「复制链接」而不是「打开」（内网脱机环境打不开），
+   * 悬停提示让这个非默认行为可被发现；作者自己写了 title 的不覆盖。
+   * 本地链接不标记：它们在应用内打开，符合直觉。 */
+  function markExternalLinks(rootEl) {
+    rootEl.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      const m = /^([a-z][a-z0-9+.-]*):/i.exec(href);
+      if (!m || m[1].length === 1) return; // 盘符开头的绝对路径不算协议
+      if (a.hasAttribute("title")) return;
+      a.title = "点击复制链接";
+    });
+  }
+
   /* ---------- Tab 状态模型（M3-1） ---------- */
 
   let tabs = []; // UI 顺序 = 数组顺序
@@ -317,6 +344,7 @@
     const env = { headingSeq: 0, outline: [] };
     tab.pane.innerHTML = window.DOMPurify.sanitize(md.render(tab.content, env));
     rewriteImages(tab.pane, tab.path);
+    markExternalLinks(tab.pane);
     initMermaid(tab.pane);
     tab.outline = env.outline;
     tab.display = "dom";
@@ -449,6 +477,7 @@
         existing.html = null; // 下次激活全量重渲染
       }
       activateTab(existing.id);
+      notifyEncoding(payload);
       scheduleSessionSave();
       return;
     }
@@ -468,6 +497,7 @@
     tabs.push(tab);
     renderDocument(tab);
     activateTab(tab.id);
+    notifyEncoding(payload);
     updateEmptyState();
     scheduleSessionSave();
     loadDeferredVendor(); // 首绘已达成，异步补齐高亮/公式/任务列表
@@ -549,17 +579,21 @@
     updateCurrentHeading();
   }
 
-  function jumpToHeading(id) {
-    const tab = getActiveTab();
-    if (!tab || !tab.pane) return;
-    const heading = tab.pane.querySelector("#" + CSS.escape(id));
-    if (!heading) return;
+  function scrollHeadingIntoView(heading) {
     const top =
       heading.getBoundingClientRect().top -
       viewerEl.getBoundingClientRect().top +
       viewerEl.scrollTop -
       12; // 留一点呼吸空隙
     viewerEl.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+  }
+
+  function jumpToHeading(id) {
+    const tab = getActiveTab();
+    if (!tab || !tab.pane) return;
+    const heading = tab.pane.querySelector("#" + CSS.escape(id));
+    if (!heading) return;
+    scrollHeadingIntoView(heading);
   }
 
   /* 滚动跟随：视口顶部最近的高亮为当前标题（rAF 节流） */
@@ -599,6 +633,97 @@
     }
     applyOutlineVisibility();
     renderOutline();
+  });
+
+  /* ---------- 文档内链接（批次 1） ----------
+   * 正文里的 <a href> 必须全部接管：此前零处理，点击会走 Chromium 默认导航 ——
+   * 相对路径把整个窗口顶掉（无边框外壳/标题栏/tab 栏一起消失），外链是打不开的
+   * 错误页。主进程侧另有 will-navigate 兜底，这里是正常路径。
+   * 分流：页内 #锚点 → 本地滚动；其余交主进程（外链 / 非 md → 复制；md → 打开）。
+   */
+
+  /* 标题 slug（对齐 GitHub / Typora 惯例）：小写、空白转连字符、去其余标点 */
+  function slugify(text) {
+    return String(text)
+      .trim()
+      .toLowerCase()
+      .replace(/[\s\u3000]+/g, "-")
+      .replace(/[^\w\u4e00-\u9fff-]/g, "");
+  }
+
+  /* 页内锚点跳转：标题 id 是合成序号（mdh-N），所以标准写法 [x](#中文标题) 的
+   * href 不可能直接命中原生 id —— 先按原样试（兼容手写的 #mdh-3、自定义 id），
+   * 未命中再用 slug 反查大纲标题文字。不动现有 id 方案，大纲与 LRU 快照都不受影响。 */
+  function jumpToAnchor(rawFrag) {
+    const tab = getActiveTab();
+    if (!tab || !tab.pane) return;
+    let frag = rawFrag;
+    try {
+      frag = decodeURIComponent(rawFrag); // href 里的中文可能是 %E4%B8%AD 形式
+    } catch (_) {
+      /* 含非法转义序列时按原样处理 */
+    }
+    if (!frag) {
+      viewerEl.scrollTo({ top: 0, behavior: "auto" }); // [回到顶部](#)
+      return;
+    }
+    let heading = tab.pane.querySelector("#" + CSS.escape(frag));
+    if (!heading) {
+      const needle = slugify(frag);
+      const hit = needle
+        ? (tab.outline || []).find((o) => slugify(o.text) === needle)
+        : null;
+      if (hit) heading = tab.pane.querySelector("#" + CSS.escape(hit.id));
+    }
+    if (!heading) {
+      showError("未找到锚点：" + frag);
+      return;
+    }
+    scrollHeadingIntoView(heading);
+    updateCurrentHeading();
+  }
+
+  function shorten(text, max) {
+    const s = String(text);
+    return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  }
+
+  panesEl.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const a = target.closest("a[href]");
+    if (!a) return;
+    e.preventDefault(); // 无论如何都不允许真导航（主进程还有一道兜底）
+    const tab = getActiveTab();
+    if (!tab) return;
+    const href = a.getAttribute("href") || "";
+    if (href.startsWith("#")) {
+      jumpToAnchor(href.slice(1));
+      return;
+    }
+    if (!href) return;
+    window.api
+      .followLink(tab.path, href)
+      .then((res) => {
+        if (!res) return;
+        if (res.action === "external") {
+          showNotice("已复制链接：" + shorten(res.text, 60), true);
+        } else if (res.action === "copied") {
+          showNotice("非 Markdown 文件，已复制路径：" + basename(res.text), true);
+        } else if (res.action === "missing") {
+          showError("未找到文件，已复制路径：" + basename(res.text));
+        } else if (res.action === "error") {
+          showError(res.message || "链接打开失败");
+        }
+        // action === "opened"：目标已在应用内打开，界面上已有反馈，不再提示
+      })
+      .catch((err) => showError(String(err)));
+  });
+
+  // 中键/辅助键点击同样不能导航（Chromium 会走「新窗口」路径，主进程已 deny）
+  panesEl.addEventListener("auxclick", (e) => {
+    const target = e.target;
+    if (target instanceof Element && target.closest("a[href]")) e.preventDefault();
   });
 
   /* ---------- 拖拽打开（M3-3） ----------
@@ -1307,6 +1432,27 @@
   const tbZoomReset = document.getElementById("tb-zoom-reset");
   const tbZoomIn = document.getElementById("tb-zoom-in");
 
+  /* 字号缩放（批次 1：改为持久化）
+   * 此前 fontFactor 只是局部变量，每次启动都回到 1.0 —— 习惯放大阅读的用户
+   * 每次都要重按几下。存 localStorage；非法值（越界/非数字）静默回默认。 */
+  const ZOOM_KEY = "mdreader.zoom";
+  const ZOOM_MIN = 0.6;
+  const ZOOM_MAX = 2;
+
+  function loadFontFactor() {
+    try {
+      const v = Number(localStorage.getItem(ZOOM_KEY));
+      if (Number.isFinite(v) && v >= ZOOM_MIN && v <= ZOOM_MAX) {
+        return Math.round(v * 10) / 10;
+      }
+    } catch (_) {
+      /* 读取失败回默认值 */
+    }
+    return 1;
+  }
+
+  let fontFactor = loadFontFactor();
+
   function applyFontFactor() {
     document.documentElement.style.setProperty(
       "--content-zoom",
@@ -1314,9 +1460,13 @@
     );
     // 缩放未偏离原值时，重置按钮无意义 → 禁用
     tbZoomReset.disabled = fontFactor === 1;
+    try {
+      localStorage.setItem(ZOOM_KEY, String(fontFactor)); // 统一在此写回，三个按钮不各写一遍
+    } catch (_) {
+      /* 持久化失败不影响本次会话 */
+    }
   }
 
-  let fontFactor = 1;
   applyFontFactor();
 
   tbZoomIn.addEventListener("click", () => {
@@ -1355,6 +1505,20 @@
     if (window.api.setThemeMode) window.api.setThemeMode(themeMode);
   }
 
+  /* 解析后的明暗值发生变化后重建：mermaid 图配色在渲染时就烧进 SVG（runMermaid
+   * 读 documentElement.dataset.theme），不重跑管线不会换色；缓存快照同理作废。 */
+  function refreshForResolvedTheme() {
+    for (const t of tabs) {
+      if (t.display === "cached") t.html = null; // 旧主题快照作废，激活时全量重渲染
+    }
+    const active = getActiveTab();
+    if (active && active.display === "dom" && active.pane) {
+      const st = viewerEl.scrollTop;
+      renderDocument(active);
+      viewerEl.scrollTop = st;
+    }
+  }
+
   function cycleThemeMode() {
     themeMode =
       THEME_MODES[(THEME_MODES.indexOf(themeMode) + 1) % THEME_MODES.length];
@@ -1366,22 +1530,18 @@
     const before = document.documentElement.dataset.theme;
     applyThemeMode();
     if (before === document.documentElement.dataset.theme) return;
-
-    // 明暗切换：活动 tab 立即重渲染（mermaid 配色跟随）；缓存快照作废
-    const active = getActiveTab();
-    if (active) {
-      if (active.display === "dom" && active.pane) {
-        const st = viewerEl.scrollTop;
-        renderDocument(active);
-        viewerEl.scrollTop = st;
-      } else {
-        active.html = null; // 下次激活全量重渲染
-      }
-    }
+    refreshForResolvedTheme();
   }
 
+  /* 跟随系统（批次 1 修复）：此前 OS 切明暗只调了 applyThemeMode()，正文配色
+   * 跟着 CSS 变量变了，但已渲染的 mermaid 图仍是旧配色（手动点工具栏切换正常，
+   * 因为那条路径会重渲染）。这里补齐同一条重渲染路径。 */
   darkQuery.addEventListener("change", () => {
-    if (themeMode === "system") applyThemeMode();
+    if (themeMode !== "system") return;
+    const before = document.documentElement.dataset.theme;
+    applyThemeMode();
+    if (before === document.documentElement.dataset.theme) return;
+    refreshForResolvedTheme();
   });
 
   tbTheme.addEventListener("click", cycleThemeMode);

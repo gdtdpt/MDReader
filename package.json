@@ -1,7 +1,7 @@
 {
   "name": "mdreader",
   "productName": "MDReader",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "内网脱机 Windows 10 1709 x64 本地 Markdown 阅读器",
   "main": "src/main/app.js",
   "scripts": {
