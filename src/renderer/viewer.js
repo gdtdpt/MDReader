@@ -417,13 +417,26 @@
    * 逻辑行是 block 元素，innerText 按行拼接且不含伪元素行号。 */
   let copyBtn = null;
   let copyPre = null;
+  let copyFeedbackTimer = 0;
+
+  const ICON_COPY =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="13" height="13" rx="2"/>' +
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const ICON_CHECK =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<polyline points="20 6 9 17 4 12"/></svg>';
 
   function getCodeCopyBtn() {
     if (!copyBtn) {
       copyBtn = document.createElement("button");
       copyBtn.type = "button";
       copyBtn.id = "code-copy-btn";
-      copyBtn.textContent = "复制";
+      copyBtn.title = "复制代码";
+      copyBtn.setAttribute("aria-label", "复制代码");
+      copyBtn.innerHTML = ICON_COPY;
       copyBtn.addEventListener("click", async () => {
         const pre = copyPre;
         hideCodeCopyBtn();
@@ -434,6 +447,17 @@
         const ok = await window.api.copyText(text);
         const n = text.replace(/\n+$/, "").split("\n").length;
         showNotice(ok ? "已复制 " + n + " 行代码" : "复制失败", ok);
+        // 按钮本身给一个短暂的对勾反馈（按钮可能在反馈期间再次浮现，直接改内容）
+        if (ok) {
+          clearTimeout(copyFeedbackTimer);
+          const btn = getCodeCopyBtn();
+          btn.innerHTML = ICON_CHECK;
+          btn.classList.add("copy-ok");
+          copyFeedbackTimer = setTimeout(() => {
+            btn.innerHTML = ICON_COPY;
+            btn.classList.remove("copy-ok");
+          }, 1200);
+        }
       });
       document.body.appendChild(copyBtn);
     }
@@ -467,22 +491,79 @@
     passive: true,
   });
 
-  /* ---------- 图片点击放大 ----------
-   * 单个共享 lightbox 挂 body（不进 pane DOM，导出产物不含）；小图按原始尺寸
-   * 展示（不放大小图），大图缩到视口内；点击任意处或 Esc 关闭。
-   * 背景恒为深色遮罩（lightbox 惯例，与主题无关）。 */
+  /* ---------- 图片点击放大（lightbox） ----------
+   * 单个共享层挂 body（不进 pane DOM，导出产物不含）。打开时按视口适配，
+   * 滚轮以鼠标为锚点缩放（可超出窗口），超出后按住拖动平移；双击在
+   * 「适配」与 100% 间切换。关闭：Esc / 右上角按钮 / 点击空白遮罩 /
+   * 窗口失焦。背景恒为深色遮罩（lightbox 惯例，与主题无关）。 */
   const imgViewer = document.createElement("div");
   imgViewer.id = "img-viewer";
   imgViewer.hidden = true;
+  const imgStage = document.createElement("div");
+  imgStage.id = "img-viewer-stage";
   const imgViewerImg = document.createElement("img");
   imgViewerImg.id = "img-viewer-img";
   imgViewerImg.alt = "";
+  imgViewerImg.draggable = false; // 防止拖成「拖图片出窗口」的原生行为
+  imgStage.appendChild(imgViewerImg);
   const imgViewerCap = document.createElement("div");
   imgViewerCap.id = "img-viewer-cap";
-  imgViewer.append(imgViewerImg, imgViewerCap);
+  const imgViewerZoom = document.createElement("div");
+  imgViewerZoom.id = "img-viewer-zoom";
+  const imgViewerClose = document.createElement("button");
+  imgViewerClose.type = "button";
+  imgViewerClose.id = "img-viewer-close";
+  imgViewerClose.title = "关闭（Esc）";
+  imgViewerClose.setAttribute("aria-label", "关闭");
+  imgViewerClose.innerHTML =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  imgViewer.append(imgStage, imgViewerCap, imgViewerZoom, imgViewerClose);
   document.body.appendChild(imgViewer);
 
+  /* 缩放平移状态：transform: translate(tx, ty) scale(s)，origin 0 0 */
+  let ivScale = 1;
+  let ivTx = 0;
+  let ivTy = 0;
+  let ivFit = 1; // 打开时的适配比例（缩放下限）
+  let ivDragging = false;
+  let ivDragMoved = false;
+
+  function ivApply() {
+    imgViewerImg.style.transform =
+      "translate(" + ivTx + "px," + ivTy + "px) scale(" + ivScale + ")";
+    imgViewerZoom.textContent = Math.round(ivScale * 100) + "%";
+    imgViewer.style.cursor = ivDragging ? "grabbing" : ivScale > ivFit ? "grab" : "zoom-in";
+  }
+
+  function ivFitToScreen() {
+    const w = imgViewerImg.naturalWidth || 1;
+    const h = imgViewerImg.naturalHeight || 1;
+    // 预留底部字幕/缩放条约 44px
+    ivFit = Math.min(
+      (window.innerWidth * 0.94) / w,
+      (window.innerHeight - 44) / h,
+      1
+    );
+    ivScale = ivFit;
+    ivTx = (window.innerWidth - w * ivScale) / 2;
+    ivTy = (window.innerHeight - 44 - h * ivScale) / 2;
+    ivApply();
+  }
+
+  /* 以 (cx, cy) 为锚点缩放到 s（锚点在缩放前后指向同一内容点） */
+  function ivZoomAt(cx, cy, s) {
+    s = Math.min(Math.max(s, ivFit), ivFit * 10);
+    const k = s / ivScale;
+    ivTx = cx - (cx - ivTx) * k;
+    ivTy = cy - (cy - ivTy) * k;
+    ivScale = s;
+    ivApply();
+  }
+
   function openImageViewer(img) {
+    imgViewerImg.style.transform = "";
     imgViewerImg.src = img.currentSrc || img.src;
     // 说明文字优先用 alt，没有就用文件名；都没有则不渲染字幕条
     const cap =
@@ -497,16 +578,93 @@
     imgViewerCap.textContent = cap;
     imgViewerCap.hidden = !cap;
     imgViewer.hidden = false;
+    // 加载完成后按自然尺寸适配（缓存图可能同步 complete）
+    if (imgViewerImg.complete && imgViewerImg.naturalWidth > 0) {
+      ivFitToScreen();
+    } else {
+      imgViewerImg.onload = () => {
+        imgViewerImg.onload = null;
+        if (!imgViewer.hidden) ivFitToScreen();
+      };
+    }
   }
 
   function closeImageViewer() {
     imgViewer.hidden = true;
+    imgViewerImg.onload = null;
     imgViewerImg.src = ""; // 释放大图引用
   }
 
-  imgViewer.addEventListener("click", closeImageViewer);
+  // 滚轮缩放：以鼠标位置为锚点，可放大到超出窗口后拖动查看
+  imgViewer.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+      ivZoomAt(e.clientX, e.clientY, ivScale * factor);
+    },
+    { passive: false }
+  );
+
+  // 拖动平移：pointer 事件统一鼠标/触控；移动超过阈值视为拖动，抑制随后
+  // 的「点击遮罩关闭」，避免拖完松手误关
+  imgViewer.addEventListener("pointerdown", (e) => {
+    if (e.target === imgViewerClose) return;
+    ivDragging = true;
+    ivDragMoved = false;
+    imgViewer.setPointerCapture(e.pointerId);
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const ox = ivTx;
+    const oy = ivTy;
+    const onMove = (ev) => {
+      if (!ivDragging) return;
+      const dx = ev.clientX - sx;
+      const dy = ev.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 3) ivDragMoved = true;
+      ivTx = ox + dx;
+      ivTy = oy + dy;
+      ivApply();
+    };
+    const onUp = () => {
+      ivDragging = false;
+      ivApply();
+      imgViewer.removeEventListener("pointermove", onMove);
+      imgViewer.removeEventListener("pointerup", onUp);
+    };
+    imgViewer.addEventListener("pointermove", onMove);
+    imgViewer.addEventListener("pointerup", onUp);
+  });
+
+  // 点击空白遮罩关闭（图片/按钮上的点击不关；拖动后的松手不关；
+  // e.detail>1 是双击的组成部分——双击复位后图片缩小，第二击会落进空白区，不能关）
+  imgViewer.addEventListener("click", (e) => {
+    if (ivDragMoved) {
+      ivDragMoved = false;
+      return;
+    }
+    if (e.detail !== 1) return;
+    if (e.target === imgViewer || e.target === imgStage) closeImageViewer();
+  });
+
+  // 双击切换：适配 ↔ 100%（以双击点为锚）
+  imgViewer.addEventListener("dblclick", (e) => {
+    if (e.target === imgViewerClose) return;
+    const atFit = Math.abs(ivScale - ivFit) < 0.01;
+    ivZoomAt(e.clientX, e.clientY, atFit ? 1 : ivFit);
+  });
+
+  imgViewerClose.addEventListener("click", closeImageViewer);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !imgViewer.hidden) closeImageViewer();
+  });
+  // 窗口失焦即关（阅读器单文档场景，离开即视为查看结束）
+  window.addEventListener("blur", () => {
+    if (!imgViewer.hidden) closeImageViewer();
+  });
+  // 窗口尺寸变化后布局基准变了，重置回适配状态最稳
+  window.addEventListener("resize", () => {
+    if (!imgViewer.hidden && imgViewerImg.naturalWidth > 0) ivFitToScreen();
   });
 
   /* 完整渲染管线：解析 → 净化 → 图片改写 → mermaid（env 顺带产出大纲） */
