@@ -12,6 +12,10 @@
  *   - img / svg / .katex-display 整体不跨页
  *   - pre 必须折行：打印态没有横向滚动条，overflow-x:auto 的超宽内容会被直接
  *     裁切，还会把假滚动条印进纸面；代码块行号 + 悬挂缩进让折行续行可归属
+ *   - 超宽公式由主进程缩放适配（app.js PRINT_FIT_FORMULAS）：公式改 font-size
+ *     等比缩小到版心内。这一步不只为了公式本身——Chromium 打印默认 shrink to
+ *     fit，任何溢出版心的内容都会把整篇文档等比压小（实测一条 1047px 公式
+ *     让全文缩到 66%），所以必须保证打印时文档不超宽
  */
 
 @page {
@@ -49,13 +53,36 @@ img {
   overflow-wrap: anywhere;
 }
 
-/* 超宽公式同理：滚动条会以「假滚动条」形态印进纸面。注意 overflow-y:hidden
- * 会让 overflow-x 的 visible 按 CSS 规范退回 auto，所以两轴一起放开 */
+/* 超宽公式：滚动条会以「假滚动条」形态印进纸面。注意 overflow-y:hidden
+ * 会让 overflow-x 的 visible 按 CSS 规范退回 auto，所以两轴一起放开；
+ * 公式本身已由 PRINT_FIT_FORMULAS 缩放进版心，这里只是兜底 */
 .markdown-body .katex-display {
   overflow: visible;
 }
 
-/* 版心宽度交给 @page 边距决定，内边距略收紧提高纸面利用率 */
+/* 屏幕态的表格是 overflow-x:auto 滚动容器（不参与全局溢出，但打印时会印出
+ * 假滚动条并裁掉右侧列）。打印态恢复 table 布局：列自动收窄、单元格文字
+ * 换行，超宽表格完整呈现 */
+.markdown-body table {
+  display: table;
+  max-width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+  overflow-wrap: anywhere;
+}
+
+/* 纸底刷白：tokens 的 --bg 是屏幕应用的画布色（亮色 #fafafa），纸面应为纯白 */
+html,
+body {
+  background: #fff;
+}
+
+/* 版心宽度钉死为 A4 内容区（210mm - 左右 16mm 边距）。全局 border-box 已定，
+ * 打印时该宽度与 @page 内容区一致；离屏窗口用它做「超宽公式缩放适配」的
+ * 测量基准，保证测量布局 == 纸面布局（app.js 的 PRINT_FIT_FORMULAS） */
 .markdown-body {
+  width: 178mm;
   padding: 2em 1.6em 3em;
 }

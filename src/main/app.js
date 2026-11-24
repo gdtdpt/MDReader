@@ -970,6 +970,28 @@ const PRINT_WAIT_ASSETS = `new Promise(function (resolve) {
   setTimeout(function () { resolve(false); }, 8000);
 })`;
 
+/* 超宽公式缩放适配：KaTeX 内部尺寸全是 em 相对单位，改 .katex 的 font-size
+ * 即整条公式等比缩放。测量用 scrollWidth/clientWidth —— overflow:visible 下
+ * Chromium 的 scrollWidth 仍包含溢出内容（实测 1047/719）；版心宽度已由
+ * export-print.css 钉死 178mm，离屏测量布局 == 纸面布局。两轮迭代兜底残差。 */
+const PRINT_FIT_FORMULAS = `(function () {
+  var els = document.querySelectorAll('.katex-display');
+  var shrunk = 0;
+  for (var pass = 0; pass < 2; pass++) {
+    shrunk = 0;
+    els.forEach(function (d) {
+      var w = d.scrollWidth, avail = d.clientWidth;
+      if (w > avail + 1) {
+        var k = d.querySelector('.katex') || d;
+        var fs = parseFloat(getComputedStyle(k).fontSize);
+        k.style.fontSize = (Math.floor((fs * avail / w) * 100) / 100) + 'px';
+        shrunk += 1;
+      }
+    });
+  }
+  return shrunk;
+})()`;
+
 async function runPrintToPdf(payload) {
   const bodyHtml = inlineExportImages(String(payload.html || ""));
   const tmpHtml = path.join(app.getPath("temp"), "mdreader-export-" + Date.now() + "-" + process.pid + ".html");
@@ -981,6 +1003,7 @@ async function runPrintToPdf(payload) {
   try {
     await win.loadFile(tmpHtml);
     await win.webContents.executeJavaScript(PRINT_WAIT_ASSETS);
+    await win.webContents.executeJavaScript(PRINT_FIT_FORMULAS);
     return await win.webContents.printToPDF({
       printBackground: true,
       preferCSSPageSize: true,
