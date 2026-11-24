@@ -1,7 +1,7 @@
 {
   "name": "mdreader",
   "productName": "MDReader",
-  "version": "1.2.0-dev3",
+  "version": "1.2.0-dev4",
   "description": "离线优先的 Windows x64 本地 Markdown 阅读器",
   "main": "src/main/app.js",
   "scripts": {
