@@ -1,13 +1,13 @@
 {
   "name": "mdreader",
   "productName": "MDReader",
-  "version": "1.2.0-dev1",
+  "version": "1.2.0-dev2",
   "description": "离线优先的 Windows x64 本地 Markdown 阅读器",
   "main": "src/main/app.js",
   "scripts": {
     "start": "electron .",
     "build:launcher": "node tools/build-launcher.js",
-    "pack": "node node_modules/electron-packager/bin/electron-packager.js . MDReader --platform=win32 --arch=x64 --icon=assets/icons/mdreader.ico --no-asar --overwrite --out=dist --ignore=\"^/dist\" --ignore=\"^/\\.git\" --ignore=\"^/\\.workbuddy\" --ignore=\"^/node_modules\" --ignore=\"^/native\" --ignore=\"^/tools\" && node tools/postpack.js"
+    "pack": "node tools/prepack.js && node node_modules/electron-packager/bin/electron-packager.js . MDReader --platform=win32 --arch=x64 --icon=assets/icons/mdreader.ico --no-asar --no-prune --out=dist --ignore=\"^/dist\" --ignore=\"^/\\.git\" --ignore=\"^/\\.workbuddy\" --ignore=\"^/node_modules\" --ignore=\"^/native\" --ignore=\"^/tools\" && node tools/postpack.js"
   },
   "devDependencies": {
     "electron": "22.3.27",
