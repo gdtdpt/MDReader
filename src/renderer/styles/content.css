@@ -307,6 +307,11 @@
 
 .markdown-body img {
   max-width: 100%;
+  cursor: zoom-in; /* 点击放大（lightbox）；链接内的图片保持 pointer，点击走链接 */
+}
+
+.markdown-body a img {
+  cursor: pointer;
 }
 
 /* KaTeX 块级公式：长公式横向滚动，不撑破版心 */

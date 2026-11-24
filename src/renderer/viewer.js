@@ -467,6 +467,48 @@
     passive: true,
   });
 
+  /* ---------- 图片点击放大 ----------
+   * 单个共享 lightbox 挂 body（不进 pane DOM，导出产物不含）；小图按原始尺寸
+   * 展示（不放大小图），大图缩到视口内；点击任意处或 Esc 关闭。
+   * 背景恒为深色遮罩（lightbox 惯例，与主题无关）。 */
+  const imgViewer = document.createElement("div");
+  imgViewer.id = "img-viewer";
+  imgViewer.hidden = true;
+  const imgViewerImg = document.createElement("img");
+  imgViewerImg.id = "img-viewer-img";
+  imgViewerImg.alt = "";
+  const imgViewerCap = document.createElement("div");
+  imgViewerCap.id = "img-viewer-cap";
+  imgViewer.append(imgViewerImg, imgViewerCap);
+  document.body.appendChild(imgViewer);
+
+  function openImageViewer(img) {
+    imgViewerImg.src = img.currentSrc || img.src;
+    // 说明文字优先用 alt，没有就用文件名；都没有则不渲染字幕条
+    const cap =
+      img.alt ||
+      (() => {
+        try {
+          return decodeURIComponent(new URL(img.src, location.href).pathname.split("/").pop() || "");
+        } catch (_) {
+          return "";
+        }
+      })();
+    imgViewerCap.textContent = cap;
+    imgViewerCap.hidden = !cap;
+    imgViewer.hidden = false;
+  }
+
+  function closeImageViewer() {
+    imgViewer.hidden = true;
+    imgViewerImg.src = ""; // 释放大图引用
+  }
+
+  imgViewer.addEventListener("click", closeImageViewer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !imgViewer.hidden) closeImageViewer();
+  });
+
   /* 完整渲染管线：解析 → 净化 → 图片改写 → mermaid（env 顺带产出大纲） */
   function renderDocument(tab) {
     if (!tab.pane) createPane(tab);
@@ -822,7 +864,15 @@
     const target = e.target;
     if (!(target instanceof Element)) return;
     const a = target.closest("a[href]");
-    if (!a) return;
+    if (!a) {
+      // 图片点击放大（链接内的图片让链接优先，走上方链接路径）
+      const img = target.closest("img");
+      if (img) {
+        e.preventDefault();
+        openImageViewer(img);
+      }
+      return;
+    }
     e.preventDefault(); // 无论如何都不允许真导航（主进程还有一道兜底）
     const tab = getActiveTab();
     if (!tab) return;

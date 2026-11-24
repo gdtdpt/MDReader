@@ -749,3 +749,42 @@
 #code-copy-btn[hidden] {
   display: none;
 }
+
+/* ---------- 图片点击放大（lightbox） ----------
+ * 共享悬浮层挂 body（viewer.js 创建），点击正文图片浮现、点击任意处/Esc 关闭。
+ * 深色遮罩是 lightbox 惯例，不随主题切换；小图按原始尺寸展示，大图缩进视口。 */
+#img-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 220; /* 高于模态(200)，遮罩层必须压住一切 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+
+#img-viewer[hidden] {
+  display: none;
+}
+
+#img-viewer-img {
+  max-width: 94vw;
+  max-height: 88vh;
+  object-fit: contain;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  background: #fff; /* 透明 PNG 在深色遮罩上的可读性 */
+}
+
+#img-viewer-cap {
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e6edf3;
+  font-size: 13px;
+  user-select: none;
+}
