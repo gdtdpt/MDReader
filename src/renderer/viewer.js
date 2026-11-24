@@ -410,6 +410,63 @@
     });
   }
 
+  /* ---------- 代码块复制 ----------
+   * 单个共享按钮挂在 body 上（不进 pane DOM）：导出 PDF/HTML 取的是
+   * pane.innerHTML，按钮混进去会被原样带到导出产物里，悬浮式天然规避。
+   * hover 到 pre 上浮现、移开即隐；点击复制 code.innerText —— 拆行后的
+   * 逻辑行是 block 元素，innerText 按行拼接且不含伪元素行号。 */
+  let copyBtn = null;
+  let copyPre = null;
+
+  function getCodeCopyBtn() {
+    if (!copyBtn) {
+      copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.id = "code-copy-btn";
+      copyBtn.textContent = "复制";
+      copyBtn.addEventListener("click", async () => {
+        const pre = copyPre;
+        hideCodeCopyBtn();
+        if (!pre || !pre.isConnected) return;
+        const code = pre.querySelector("code");
+        const text = code ? code.innerText : "";
+        if (!text) return;
+        const ok = await window.api.copyText(text);
+        const n = text.replace(/\n+$/, "").split("\n").length;
+        showNotice(ok ? "已复制 " + n + " 行代码" : "复制失败", ok);
+      });
+      document.body.appendChild(copyBtn);
+    }
+    return copyBtn;
+  }
+
+  function hideCodeCopyBtn() {
+    copyPre = null;
+    if (copyBtn) copyBtn.hidden = true;
+  }
+
+  document.addEventListener("mouseover", (e) => {
+    if (!(e.target instanceof Element)) return;
+    const pre = e.target.closest("pre.has-lines");
+    if (pre) {
+      copyPre = pre;
+      const btn = getCodeCopyBtn();
+      const rect = pre.getBoundingClientRect();
+      btn.hidden = false;
+      // fixed 定位即视口坐标，直接用 rect；贴代码块右上角内侧
+      btn.style.top = Math.round(rect.top + 6) + "px";
+      btn.style.right =
+        Math.round(Math.max(6, window.innerWidth - rect.right + 6)) + "px";
+      return;
+    }
+    if (copyPre && !(copyBtn && copyBtn.contains(e.target))) hideCodeCopyBtn();
+  });
+
+  // 正文滚动时按钮是 fixed 的不会跟随，直接隐藏（再 hover 会重新浮现）
+  document.getElementById("viewer").addEventListener("scroll", hideCodeCopyBtn, {
+    passive: true,
+  });
+
   /* 完整渲染管线：解析 → 净化 → 图片改写 → mermaid（env 顺带产出大纲） */
   function renderDocument(tab) {
     if (!tab.pane) createPane(tab);

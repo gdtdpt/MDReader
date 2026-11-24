@@ -843,6 +843,14 @@ function registerIpc() {
     }
   });
 
+  // 代码块复制：渲染层不直接碰 navigator.clipboard（file:// 下权限行为不稳），
+  // 统一走主进程剪贴板；文本白名单校验 + 长度上限
+  ipcMain.handle("clipboard:write", (_event, text) => {
+    if (typeof text !== "string" || text.length > 10 * 1024 * 1024) return false;
+    clipboard.writeText(text);
+    return true;
+  });
+
   /* 导出 PDF：payload { html, title, defaultPath?, outPath? }。
    * outPath 仅供自动化测试直写目标文件；正常路径走保存对话框。 */
   ipcMain.handle("export:pdf", async (_event, payload) => {

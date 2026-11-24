@@ -721,3 +721,31 @@
   outline-offset: 1px;
 }
 
+
+/* ---------- 代码块复制按钮 ----------
+ * 单个共享悬浮按钮（viewer.js 创建），hover 到 pre.has-lines 时浮现于其右上角。
+ * fixed 定位不随正文滚动，滚动时由脚本隐藏；不属于 pane，不会进入导出产物。 */
+#code-copy-btn {
+  position: fixed;
+  z-index: 60; /* 高于正文，低于查找栏(85)/菜单(90)/通知(95) */
+  padding: 2px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  opacity: 0.92;
+}
+
+#code-copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+#code-copy-btn[hidden] {
+  display: none;
+}

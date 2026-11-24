@@ -121,6 +121,11 @@ contextBridge.exposeInMainWorld("api", {
     return ipcRenderer.invoke("export:html", payload);
   },
 
+  /** 写系统剪贴板（代码块复制用）。@returns {Promise<boolean>} 是否成功 */
+  copyText(text) {
+    return ipcRenderer.invoke("clipboard:write", text);
+  },
+
   /**
    * 查询关闭窗口行为（"ask" 每次询问 / "tray" 最小化到托盘 / "quit" 完全退出）。
    * @returns {Promise<"ask"|"tray"|"quit">}
