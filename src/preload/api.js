@@ -109,6 +109,15 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   /**
+   * 导出当前正文为 PDF。payload: { html, title, defaultPath?, outPath? }；
+   * outPath 仅供自动化测试直写，正常路径由主进程弹保存对话框。
+   * @returns {Promise<{ok: boolean, path?: string, canceled?: boolean, error?: string}>}
+   */
+  exportPdf(payload) {
+    return ipcRenderer.invoke("export:pdf", payload);
+  },
+
+  /**
    * 查询关闭窗口行为（"ask" 每次询问 / "tray" 最小化到托盘 / "quit" 完全退出）。
    * @returns {Promise<"ask"|"tray"|"quit">}
    */

@@ -1,0 +1,61 @@
+/* MDReader 导出打印层 —— 只写「纸面差异」，正文排版完全来自 content.css。
+ *
+ * 叠加顺序：tokens.css → content.css → 本文件；容器不设 data-theme，
+ * tokens 的 :root 默认值即亮色（恒亮色约定，无需任何覆盖代码）。
+ *
+ * 纸张：A4，边距上 18mm / 左右 16mm / 下 20mm；配合 printToPDF 的
+ * preferCSSPageSize: true 让 @page 生效。
+ *
+ * 分页控制均为 Chromium 108 实测结论（.workbuddy/pagetest）：
+ *   - h1~h6 { break-after: avoid }  标题不孤悬页尾（默认会孤悬，实测加后生效）
+ *   - tr   { break-inside: avoid }  表格行不被纵向切开（默认已如此，显式写死为保险）
+ *   - img / svg / .katex-display 整体不跨页
+ *   - pre 必须折行：打印态没有横向滚动条，overflow-x:auto 的超宽内容会被直接
+ *     裁切，还会把假滚动条印进纸面；代码块行号 + 悬挂缩进让折行续行可归属
+ */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  break-after: avoid;
+}
+
+tr {
+  break-inside: avoid;
+}
+
+img,
+svg,
+.katex-display {
+  break-inside: avoid;
+}
+
+img {
+  max-width: 100%;
+}
+
+/* 屏幕上的横向滚动条在纸面上不存在：超宽代码行改为折行 */
+.markdown-body pre {
+  overflow-x: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 超宽公式同理：滚动条会以「假滚动条」形态印进纸面。注意 overflow-y:hidden
+ * 会让 overflow-x 的 visible 按 CSS 规范退回 auto，所以两轴一起放开 */
+.markdown-body .katex-display {
+  overflow: visible;
+}
+
+/* 版心宽度交给 @page 边距决定，内边距略收紧提高纸面利用率 */
+.markdown-body {
+  padding: 2em 1.6em 3em;
+}

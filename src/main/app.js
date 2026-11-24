@@ -15,7 +15,7 @@ const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
-const { fileURLToPath } = require("url");
+const { fileURLToPath, pathToFileURL } = require("url");
 const fsp = fs.promises;
 
 const MD_EXTENSIONS = ["md", "markdown", "mdown", "mkdn", "txt"];
@@ -842,6 +842,154 @@ function registerIpc() {
       nativeTheme.themeSource = mode;
     }
   });
+
+  /* 导出 PDF：payload { html, title, defaultPath?, outPath? }。
+   * outPath 仅供自动化测试直写目标文件；正常路径走保存对话框。 */
+  ipcMain.handle("export:pdf", async (_event, payload) => {
+    try {
+      let target = payload && payload.outPath;
+      if (!target) {
+        const dlg = await dialog.showSaveDialog(mainWindow, {
+          title: "导出为 PDF",
+          defaultPath: (payload && payload.defaultPath) || "导出.pdf",
+          filters: [{ name: "PDF 文档", extensions: ["pdf"] }],
+        });
+        if (dlg.canceled || !dlg.filePath) return { ok: false, canceled: true };
+        target = dlg.filePath;
+      }
+      const pdf = await runPrintToPdf(payload || {});
+      await fsp.writeFile(target, pdf);
+      return { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+  });
+}
+
+/* ---------- 导出 PDF（M5 批次 2） ----------
+ * 渲染层把正文 DOM（pane.innerHTML）交上来，主进程负责纸面化：组装
+ * tokens + content + 打印层（export-print.css）+ KaTeX 的完整 HTML，离屏窗口
+ * 加载后 printToPDF —— Chromium 打印管线自动按 A4 分页，分页控制见
+ * export-print.css（标题不孤悬页尾 / 表格行不切 / 代码折行）。
+ * 恒亮色：导出容器不设 data-theme，tokens 的 :root 默认值即亮色。
+ * 忽略屏幕缩放：导出 DOM 不经过 --font-factor，固定 16px 基准。 */
+
+let printCssCache = null;
+
+function katexCssInline() {
+  const dir = path.join(__dirname, "..", "..", "vendor", "katex");
+  const css = fs.readFileSync(path.join(dir, "katex.min.css"), "utf8");
+  // @font-face 的相对字体引用改写为绝对 file URL，供离屏打印窗口加载
+  return css.replace(/url\((['"]?)(fonts\/[^'")]+)\1\)/g, (m, q, rel) => {
+    return "url(" + pathToFileURL(path.join(dir, rel)).href + ")";
+  });
+}
+
+function printCss() {
+  if (printCssCache === null) {
+    const read = (p) => fs.readFileSync(p, "utf8");
+    // KaTeX 样式一并内联（含公式的 MathML 隐藏规则），打印层最后覆盖屏幕差异
+    printCssCache =
+      katexCssInline() +
+      "\n" +
+      read(path.join(__dirname, "..", "renderer", "styles", "tokens.css")) +
+      "\n" +
+      read(path.join(__dirname, "..", "renderer", "styles", "content.css")) +
+      "\n" +
+      read(path.join(__dirname, "export-print.css"));
+  }
+  return printCssCache;
+}
+
+function escapeHtmlText(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+const EXPORT_IMG_MIME = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
+};
+
+const EXPORT_IMG_SRC_RE = /(<img\b[^>]*?\bsrc=")file:\/\/\/([^"]*?)(")/g;
+
+/* 正文里的相对图片在渲染期已被改写成 file:/// 绝对路径；PDF 内嵌需要转 data:。
+ * 读取失败（文件被移动等）保留原引用，让导出继续而不中断。 */
+function inlineExportImages(html) {
+  return html.replace(EXPORT_IMG_SRC_RE, (m, head, urlPath, tail) => {
+    try {
+      const file = decodeURIComponent(urlPath);
+      const mime = EXPORT_IMG_MIME[path.extname(file).toLowerCase()];
+      if (!mime) return m;
+      return head + "data:" + mime + ";base64," + fs.readFileSync(file).toString("base64") + tail;
+    } catch (_) {
+      return m;
+    }
+  });
+}
+
+function buildPrintHtml(bodyHtml, title) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtmlText(title)}</title>
+<style>${printCss()}</style>
+</head>
+<body>
+<div class="markdown-body">${bodyHtml}</div>
+</body>
+</html>`;
+}
+
+/* 等图片与 KaTeX 字体就绪再打印（超时兜底，缺失资源不无限等） */
+const PRINT_WAIT_ASSETS = `new Promise(function (resolve) {
+  var imgs = Array.prototype.slice.call(document.images);
+  var left = imgs.filter(function (i) { return !i.complete; }).length;
+  var fonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+  var settled = false;
+  function finish() {
+    if (settled) return;
+    settled = true;
+    Promise.race([fonts, new Promise(function (r) { setTimeout(r, 2000); })]).then(function () { resolve(true); });
+  }
+  if (left === 0) return finish();
+  imgs.forEach(function (i) {
+    i.addEventListener("load", step);
+    i.addEventListener("error", step);
+  });
+  function step() {
+    left -= 1;
+    if (left === 0) finish();
+  }
+  setTimeout(function () { resolve(false); }, 8000);
+})`;
+
+async function runPrintToPdf(payload) {
+  const bodyHtml = inlineExportImages(String(payload.html || ""));
+  const tmpHtml = path.join(app.getPath("temp"), "mdreader-export-" + Date.now() + "-" + process.pid + ".html");
+  fs.writeFileSync(tmpHtml, buildPrintHtml(bodyHtml, String(payload.title || "MDReader")), "utf8");
+  const win = new BrowserWindow({
+    show: false,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  try {
+    await win.loadFile(tmpHtml);
+    await win.webContents.executeJavaScript(PRINT_WAIT_ASSETS);
+    return await win.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      pageSize: "A4",
+    });
+  } finally {
+    win.destroy();
+    fs.unlink(tmpHtml, () => {});
+  }
 }
 
 /* ---------- 生命周期 ---------- */

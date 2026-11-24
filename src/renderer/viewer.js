@@ -1153,6 +1153,26 @@
     hideMoreMenu();
   });
 
+  /* 导出 PDF：正文 DOM 交给主进程纸面化（分页控制见 export-print.css）。
+   * 恒亮色 / 固定 16px 基准都由主进程组装时保证，这里只交内容。 */
+  document.getElementById("menu-export-pdf").addEventListener("click", async () => {
+    hideMoreMenu();
+    const tab = getActiveTab();
+    if (!tab || !tab.path || tab.display !== "dom" || !tab.pane) {
+      showNotice("当前没有可导出的文档", false);
+      return;
+    }
+    showNotice("正在导出 PDF…", true);
+    const res = await window.api.exportPdf({
+      html: tab.pane.innerHTML,
+      title: basename(tab.path),
+      defaultPath: tab.path.replace(/\.[^.]+$/, "") + ".pdf",
+    });
+    if (res.ok) showNotice("已导出：" + res.path, true);
+    else if (res.canceled) showNotice("已取消导出", true);
+    else showNotice("导出失败：" + (res.error || "未知错误"), false);
+  });
+
   document.getElementById("menu-default-opener").addEventListener("click", async () => {
     hideMoreMenu();
     // 先查关联：有冲突才弹自绘确认框（应用内风格），无冲突直接写
