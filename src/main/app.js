@@ -151,6 +151,22 @@ function showWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  ensureForeground(mainWindow);
+}
+
+/* Windows 前台兜底（热启动唤起窗口）。
+ * 常驻进程收到管道消息时不是前台进程，它自己调 SetForegroundWindow 会被系统
+ * 前台锁降级成任务栏闪烁，窗口就被别的窗口压着 —— 现场表现是「有时候」不出现
+ * 在最前面。主路径由启动器代为激活（它是用户双击唤起的，持有前台权限）；
+ * 这里补两件轻活：把窗口提到 z-order 顶部（至少不被遮挡），以及 show() 之后
+ * 的焦点滞后时再补一次 focus（second-instance / 托盘唤出等路径）。 */
+function ensureForeground(win) {
+  if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+  win.moveTop();
+  setTimeout(() => {
+    if (!win || win.isDestroyed() || win.isFocused()) return;
+    win.focus();
+  }, 60);
 }
 
 function quitApp() {
@@ -649,6 +665,7 @@ function createWindow() {
 
   // 开发期保留 DevTools 快捷键；打包后由菜单模板控制
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  ensureForeground(mainWindow);
 
   // 页面就绪后：先推启动元信息（渲染层据此决定是否恢复会话），
   // 再处理初始命令行文件（修复此前端口：仅 second-instance 处理过 argv）

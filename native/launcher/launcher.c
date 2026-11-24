@@ -35,6 +35,11 @@
 #define APP_EXE L"MDReader.exe"
 #define BUF_CHARS 32768
 
+/* 「任意进程均可」的前台授权标志（winuser.h 一般已定义，老头文件兜底） */
+#ifndef ASFW_ANY
+#define ASFW_ANY ((DWORD)-1)
+#endif
+
 /* 进程创建 → 现在（毫秒）。与 Electron 侧 procBootMs 同口径：
  * 宿主日志里直接就能看到"这次双击付了多少映像创建开销"。 */
 static unsigned ProcBootMs(void)
@@ -98,6 +103,13 @@ static BOOL SendToResident(const wchar_t *path)
         if (h == INVALID_HANDLE_VALUE) return FALSE;
     }
 
+    /* 把「这一次可以抢前台」的权限转授给常驻实例再发消息。
+     * 热启动复用已有窗口，而常驻进程不是前台进程 —— Windows 前台锁会把它的
+     * SetForegroundWindow 降级成任务栏闪烁，窗口就留在别的窗口后面。启动器是
+     * 用户双击唤起的、本身持有前台权限，正好可以转授（ASFW_ANY = 不限定接收方，
+     * 一次性，被下一次抢前台消耗掉；调用失败无副作用）。 */
+    AllowSetForegroundWindow(ASFW_ANY);
+
     boot = ProcBootMs();
     if (boot == 0) digits[n++] = L'0';
     while (boot) {
@@ -115,6 +127,80 @@ static BOOL SendToResident(const wchar_t *path)
     WriteFile(h, msg, (DWORD)((i + 1) * sizeof(wchar_t)), &written, NULL);
     CloseHandle(h);
     return TRUE;
+}
+
+/* ---------- 把常驻窗口提到前台 ----------
+ * 热启动复用的是已有窗口：常驻进程此刻不是前台进程，它自己调 SetForegroundWindow
+ * 会被系统前台锁降级成任务栏闪烁，窗口就留在别的窗口后面（窗口当时已可见、只是
+ * 被遮挡时最容易发生；hide() 后重新 show() 反而多半能成功，所以观感是「有时候」）。
+ * 启动器是用户双击唤起的、持有前台权限且生命周期极短，由它来激活最可靠：
+ * 按映像路径枚举出常驻实例的顶层窗口，再把本线程临时附加到前台线程的输入队列，
+ * 否则跨线程激活在部分场景仍会被拒（AttachThreadInput 是这条链路的常用解法）。 */
+
+static BOOL MatchExePath(DWORD pid, const wchar_t *exePath)
+{
+    HANDLE h;
+    wchar_t buf[MAX_PATH];
+    DWORD size = MAX_PATH;
+    BOOL ok;
+
+    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) return FALSE;
+    ok = QueryFullProcessImageNameW(h, 0, buf, &size);
+    CloseHandle(h);
+    return ok && _wcsicmp(buf, exePath) == 0;
+}
+
+typedef struct { const wchar_t *exe; HWND found; } FindCtx;
+
+static BOOL CALLBACK FindResidentWnd(HWND h, LPARAM lp)
+{
+    FindCtx *ctx = (FindCtx *)lp;
+    DWORD pid = 0;
+
+    if (!IsWindowVisible(h)) return TRUE;
+    if (GetWindow(h, GW_OWNER) != NULL) return TRUE; /* 跳过对话框/工具窗等附属窗口 */
+    if (GetWindowTextLengthW(h) == 0) return TRUE;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid && MatchExePath(pid, ctx->exe)) {
+        ctx->found = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void ForceForeground(HWND h)
+{
+    HWND fg = GetForegroundWindow();
+    DWORD fgThread = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    DWORD selfThread = GetCurrentThreadId();
+    BOOL attached = FALSE;
+
+    if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+    if (fgThread && fgThread != selfThread)
+        attached = AttachThreadInput(selfThread, fgThread, TRUE);
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+    SetActiveWindow(h);
+    if (attached) AttachThreadInput(selfThread, fgThread, FALSE);
+}
+
+/* 窗口可能在消息到达后才由 hide 转 show，短暂轮询等它可见 */
+static void ActivateResident(const wchar_t *exe)
+{
+    FindCtx ctx;
+    int i;
+
+    for (i = 0; i < 25; ++i) {
+        ctx.exe = exe;
+        ctx.found = NULL;
+        EnumWindows(FindResidentWnd, (LPARAM)&ctx);
+        if (ctx.found) {
+            ForceForeground(ctx.found);
+            return;
+        }
+        Sleep(20);
+    }
 }
 
 /* 未常驻：直接拉起完整应用（与引入启动器之前的行为一致）。
@@ -378,6 +464,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmdLine, int nShowC
      * 常驻移交失败 = 未常驻 → 冷启动 + 启动浮窗 + 管道轮询。 */
     if (!SendToResident(arg[0] ? arg : NULL)) {
         ColdStartAndWait(hInst, exe, arg[0] ? arg : NULL);
+    } else {
+        /* 热启动：常驻实例自己抢不到前台，由启动器代劳（见 ActivateResident） */
+        ActivateResident(exe);
     }
     return 0;
 }
