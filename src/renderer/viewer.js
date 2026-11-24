@@ -338,6 +338,78 @@
     return pane;
   }
 
+  /* ---------- 代码块行号 ----------
+   * 把 pre>code 的内容按逻辑行包成 <span class="cl">，行号交给 CSS 计数器生成：
+   * 伪元素不参与 innerText，「复制代码」拿到的仍是纯代码；超宽行折行时样式层的
+   * 悬挂缩进让续行与代码列对齐、行号列留白，读者凭行号即可判断续行归属。
+   * hljs 的高亮 span 可能跨行（多行注释、多行字符串），拆行时按未闭合标签栈先
+   * 在一行末尾闭合、在下一行开头重开，视觉与拆之前完全一致。 */
+  function splitHtmlLines(html) {
+    const lines = [];
+    const stack = []; // 未闭合标签（按打开顺序，存原始开标签以便原样重开）
+    let cur = "";
+    let i = 0;
+    while (i < html.length) {
+      const ch = html[i];
+      if (ch === "<") {
+        const end = html.indexOf(">", i);
+        if (end < 0) {
+          cur += html.slice(i); // 残缺标签，原样收尾（实际不会发生）
+          break;
+        }
+        const tag = html.slice(i, end + 1);
+        const m = /^<(\/?)([a-zA-Z][\w-]*)/.exec(tag);
+        if (!m) {
+          cur += tag; // 注释 / doctype 等
+        } else if (m[1] === "/") {
+          const top = stack[stack.length - 1];
+          if (top && top.name === m[2]) stack.pop();
+          cur += tag;
+        } else if (!/\/>$/.test(tag)) {
+          stack.push({ name: m[2], open: tag });
+          cur += tag;
+        } else {
+          cur += tag; // 自闭合
+        }
+        i = end + 1;
+        continue;
+      }
+      if (ch === "\n") {
+        for (let k = stack.length - 1; k >= 0; k--) cur += "</" + stack[k].name + ">";
+        lines.push(cur);
+        cur = stack.map((s) => s.open).join("");
+        i += 1;
+        continue;
+      }
+      cur += ch;
+      i += 1;
+    }
+    lines.push(cur);
+    return lines;
+  }
+
+  function wrapCodeLines(root) {
+    root.querySelectorAll("pre > code").forEach((code) => {
+      if (code.querySelector(".cl")) return; // 幂等：快照重建等路径可能已包过
+      const lines = splitHtmlLines(code.innerHTML.replace(/\r\n?/g, "\n"));
+      // 内容以换行结尾时 split 会多出一个空元素，去掉它（不会吃掉真实空行）
+      if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+      const frag = document.createDocumentFragment();
+      for (let n = 0; n < lines.length; n++) {
+        const span = document.createElement("span");
+        span.className = "cl";
+        span.innerHTML = lines[n]; // 内容来自已净化的 DOM，拆行不引入新标签
+        frag.appendChild(span);
+      }
+      code.textContent = "";
+      code.appendChild(frag);
+      // 行号列宽按位数自适应（1ch ≈ 一个等宽数字），避免一位数时右侧一片空白
+      code.style.setProperty("--ln-digits", String(String(lines.length).length));
+      const pre = code.parentElement;
+      if (pre) pre.classList.add("has-lines");
+    });
+  }
+
   /* 完整渲染管线：解析 → 净化 → 图片改写 → mermaid（env 顺带产出大纲） */
   function renderDocument(tab) {
     if (!tab.pane) createPane(tab);
@@ -345,6 +417,7 @@
     tab.pane.innerHTML = window.DOMPurify.sanitize(md.render(tab.content, env));
     rewriteImages(tab.pane, tab.path);
     markExternalLinks(tab.pane);
+    wrapCodeLines(tab.pane); // 行号：必须在 mermaid 替换之前（mermaid 块不是 pre）
     initMermaid(tab.pane);
     tab.outline = env.outline;
     tab.display = "dom";

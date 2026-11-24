@@ -15,6 +15,7 @@
   --border: #d8dee4;
   --code-bg: #f6f8fa;
   --inline-code-fg: #953800;
+  --code-line-no: #8c959f;
   --accent: #0969da;
   --blockquote-fg: #57606a;
 
@@ -63,6 +64,7 @@
   --border: #30363d;
   --code-bg: #161b22;
   --inline-code-fg: #f0883e;
+  --code-line-no: #6e7681;
   --accent: #58a6ff;
   --blockquote-fg: #8b949e;
 

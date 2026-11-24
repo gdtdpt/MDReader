@@ -132,6 +132,35 @@
   color: var(--text);
   font-size: 0.875em;
   line-height: 1.5;
+  counter-reset: md-line; /* 行号计数器，每个 .cl 的 ::before 自增一次 */
+}
+
+/* ---------- 代码块行号 ----------
+ * 行号由计数器 + 伪元素生成，不进入 innerText —— 「复制代码」拿到的仍是纯代码。
+ * 列宽按行号位数自适应（--ln-digits 由 viewer.js 写入），左内边距收到 12px 让行号
+ * 贴近卡片边缘；首行悬挂缩进（padding-left 配负 text-indent）：超宽行折行后，续行
+ * 自动与代码列对齐、行号列留白，读者凭行号就能判断这几行属于同一逻辑行。 */
+.markdown-body pre.has-lines {
+  padding-left: 12px; /* 行号列贴边；右侧内边距保持原值 */
+}
+
+.markdown-body pre .cl {
+  display: block;
+  min-height: 1.5em; /* 空行也占满一行高（内容为空的 block 高度会塌成 0） */
+  padding-left: calc(var(--ln-digits, 2) * 1ch + 1.2em);
+  text-indent: calc(-1 * (var(--ln-digits, 2) * 1ch + 1.2em));
+}
+
+.markdown-body pre .cl::before {
+  counter-increment: md-line;
+  content: counter(md-line);
+  display: inline-block;
+  width: calc(var(--ln-digits, 2) * 1ch);
+  margin-right: 1.2em;
+  text-align: right;
+  color: var(--code-line-no);
+  user-select: none; /* 行号不可选中，避免复制时混入 */
+  -webkit-user-select: none;
 }
 
 /* ---------- Mermaid 图块（M2-4） ---------- */
