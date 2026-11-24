@@ -144,11 +144,13 @@ static BOOL ColdStart(const wchar_t *exe, const wchar_t *path, PROCESS_INFORMATI
 
 /* ---------- 启动等待浮窗 ----------
  * 冷启动时 MDReader.exe 从被创建到主进程就绪有数秒空窗（外部扫描 + Electron 引导），
- * 期间用户没有任何视觉反馈。这个浮窗在拉起 MDReader.exe 之前就显示，管道可连
- * （= 应用主进程就绪）即关闭退出。仅 kernel32/user32 静态编译，不增依赖。 */
+ * 这段任何应用内代码都来不及跑，只有这个 15KB 小进程能给出视觉反馈。
+ * 浮窗在拉起 MDReader.exe 之前就显示：应用图标 + 提示文字 + 底部流动进度条
+ * （30ms 定时重绘，让等待「看得见在动」），淡色主题用白底 + 描边 + 投影
+ * 保证在杂乱桌面上醒目；管道可连（= 主进程就绪）即关闭退出。 */
 
-#define SPLASH_W 320
-#define SPLASH_H 96
+#define SPLASH_W 360
+#define SPLASH_H 120
 #define SPLASH_TIMEOUT_MS 20000
 
 /* 高 DPI：物理像素坐标 + 按系统 DPI 缩放窗口与字号（文字不发虚） */
@@ -157,7 +159,9 @@ static int Dpi(int v) { return v * g_dpi / 96; }
 
 static HWND g_splash = NULL;
 static HFONT g_font = NULL;
-static COLORREF g_bg, g_fg;
+static HICON g_icon = NULL;
+static COLORREF g_bg, g_fg, g_border, g_track, g_accent;
+static wchar_t g_appExe[MAX_PATH]; /* 供 ExtractIconExW 提取应用图标 */
 
 /* 读系统「应用模式」明暗（与 MDReader 的跟随系统主题同源），读不到按浅色 */
 static BOOL IsDarkMode(void)
@@ -172,29 +176,84 @@ static BOOL IsDarkMode(void)
     return v == 0;
 }
 
+/* 动态取 shell32 的 ExtractIconExW（避免为一次调用改链接依赖） */
+static HICON LoadAppIcon(void)
+{
+    typedef UINT (WINAPI *ExtractIconExW_t)(LPCWSTR, int, HICON *, HICON *, UINT);
+    HMODULE sh = LoadLibraryW(L"shell32.dll");
+    if (!sh) return NULL;
+    ExtractIconExW_t fn = (ExtractIconExW_t)GetProcAddress(sh, "ExtractIconExW");
+    HICON icon = NULL;
+    if (fn) fn(g_appExe, 0, &icon, NULL, 1);
+    FreeLibrary(sh);
+    return icon;
+}
+
 static LRESULT CALLBACK SplashProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_CREATE:
+        SetTimer(h, 1, 30, NULL); /* 进度条动画的心跳 */
+        return 0;
+    case WM_TIMER:
+        InvalidateRect(h, NULL, FALSE);
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
         RECT rc;
         GetClientRect(h, &rc);
-        HBRUSH brush = CreateSolidBrush(g_bg);
+        HBRUSH brush;
+        brush = CreateSolidBrush(g_bg);
         FillRect(dc, &rc, brush);
         DeleteObject(brush);
-        HGDIOBJ old = SelectObject(dc, g_font);
+        brush = CreateSolidBrush(g_border);
+        FrameRect(dc, &rc, brush); /* 1px 描边：淡色桌面上勾出轮廓 */
+        DeleteObject(brush);
+
+        /* 应用图标 + 文字，整体在窗口里垂直居中 */
+        int isz = Dpi(32);
+        int iconY = Dpi(16);
+        if (g_icon) {
+            DrawIconEx(dc, (rc.right - isz) / 2, iconY, g_icon, isz, isz, 0, NULL, DI_NORMAL);
+        }
+        HGDIOBJ oldFont = SelectObject(dc, g_font);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, g_fg);
-        RECT textRc = rc;
-        textRc.bottom -= Dpi(SPLASH_H) / 3; /* 文字略偏上，下方留白像标题栏高度 */
+        RECT textRc;
+        textRc.left = 0;
+        textRc.top = iconY + isz + Dpi(10);
+        textRc.right = rc.right;
+        textRc.bottom = textRc.top + Dpi(24);
         DrawTextW(dc, L"MDReader 正在启动…", -1, &textRc,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SelectObject(dc, old);
+        SelectObject(dc, oldFont);
+
+        /* 底部流动进度条：1/3 宽的色块在轨道上循环移动 */
+        int mx = Dpi(24), mw = rc.right - Dpi(48);
+        int my = rc.bottom - Dpi(16), mh = Dpi(4);
+        RECT track = {mx, my, mx + mw, my + mh};
+        brush = CreateSolidBrush(g_track);
+        FillRect(dc, &track, brush);
+        DeleteObject(brush);
+        int seg = mw / 3;
+        int period = 1200; /* 一个循环的毫秒数 */
+        int t = (int)(GetTickCount() % period);
+        int x = mx - seg + (int)((LONG64)(mw + seg) * t / period);
+        RECT mv = {x, my, x + seg, my + mh};
+        if (mv.left < mx) mv.left = mx;
+        if (mv.right > mx + mw) mv.right = mx + mw;
+        if (mv.right > mv.left) {
+            brush = CreateSolidBrush(g_accent);
+            FillRect(dc, &mv, brush);
+            DeleteObject(brush);
+        }
         EndPaint(h, &ps);
         return 0;
     }
     case WM_DESTROY:
+        KillTimer(h, 1);
+        if (g_icon) DestroyIcon(g_icon);
         return 0;
     default:
         return DefWindowProcW(h, msg, wp, lp);
@@ -205,6 +264,7 @@ static HWND CreateSplash(HINSTANCE hInst)
 {
     WNDCLASSW wc;
     ZeroMemory(&wc, sizeof(wc));
+    wc.style = CS_DROPSHADOW; /* 投影：淡色桌面上更醒目 */
     wc.lpfnWndProc = SplashProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_APPSTARTING);
@@ -215,15 +275,22 @@ static HWND CreateSplash(HINSTANCE hInst)
     const int w = Dpi(SPLASH_W), hgt = Dpi(SPLASH_H);
 
     if (IsDarkMode()) {
-        g_bg = RGB(0x0d, 0x11, 0x17); /* 与主题暗色背景一致 */
-        g_fg = RGB(0xe6, 0xed, 0xf3);
+        g_bg     = RGB(0x0d, 0x11, 0x17); /* 与主题暗色背景一致 */
+        g_fg     = RGB(0xe6, 0xed, 0xf3);
+        g_border = RGB(0x30, 0x36, 0x3d);
+        g_track  = RGB(0x21, 0x26, 0x2d);
+        g_accent = RGB(0x58, 0xa6, 0xff);
     } else {
-        g_bg = RGB(0xfa, 0xfa, 0xfa); /* 与主题亮色背景一致 */
-        g_fg = RGB(0x1f, 0x23, 0x28);
+        g_bg     = RGB(0xff, 0xff, 0xff); /* 纯白 + 描边 + 投影，淡色桌面不隐身 */
+        g_fg     = RGB(0x1f, 0x23, 0x28);
+        g_border = RGB(0xd0, 0xd7, 0xde);
+        g_track  = RGB(0xea, 0xee, 0xf2);
+        g_accent = RGB(0x09, 0x69, 0xda);
     }
     g_font = CreateFontW(-Dpi(15), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+    g_icon = LoadAppIcon();
 
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
@@ -251,6 +318,7 @@ static void PumpMessages(void)
  * 子进程退出（异常）或超时也结束（路径已在 argv 里，应用自身仍会打开）。 */
 static void ColdStartAndWait(HINSTANCE hInst, const wchar_t *exe, const wchar_t *path)
 {
+    lstrcpynW(g_appExe, exe, MAX_PATH);
     /* 防叠窗：已有另一个启动器浮窗在等，就不再画自己的 */
     HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\MDReaderSplash");
     BOOL splashAllowed = mutex && GetLastError() != ERROR_ALREADY_EXISTS;
@@ -261,12 +329,12 @@ static void ColdStartAndWait(HINSTANCE hInst, const wchar_t *exe, const wchar_t 
         DWORD start = GetTickCount();
         BOOL done = FALSE;
         while (!done) {
-            PumpMessages(); /* 浮窗保持可绘制/可响应 */
+            PumpMessages(); /* 浮窗保持可绘制/可响应（含进度动画） */
             if (SendToResident(path)) { /* 管道可连 = 主进程就绪，移交后收工 */
                 done = TRUE;
                 break;
             }
-            if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) break;
+            if (WaitForSingleObject(pi.hProcess, 40) == WAIT_OBJECT_0) break;
             if (GetTickCount() - start > SPLASH_TIMEOUT_MS) break;
         }
         CloseHandle(pi.hThread);
