@@ -8,7 +8,7 @@
   <title>MDReader</title>
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="theme.css" />
-  <link rel="stylesheet" href="../../vendor/katex/katex.min.css" />
+  <!-- KaTeX 样式只在正文含公式时才被用到，放首屏阻塞链路里会拖慢首次绘制 -->
 </head>
 <body>
   <!-- Typora 风格一体化标题栏：同色、可拖拽、右侧窗控按钮 -->
@@ -147,6 +147,7 @@
     </div>
   </div>
 
+  <link rel="stylesheet" href="../../vendor/katex/katex.min.css" />
   <!-- 启动仅同步加载必需库（M4 启动优化：highlight/KaTeX/task 由 viewer.js 首绘后懒加载）
        defer：不阻塞首绘（标题栏/工具栏外壳先画出来），执行顺序仍与同步一致 -->
   <script defer src="../../vendor/markdown-it.min.js"></script>
