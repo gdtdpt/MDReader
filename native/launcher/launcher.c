@@ -6,12 +6,17 @@
  *   对照小 exe       200 KB   → 约 1.5 s
  * 所以这里刻意把映像做到约 15 KB（gcc -Os -s -static），把这一笔压到最小。
  *
- * 职责只有一个：把文件路径交给常驻实例，然后立刻退出。
+ * 职责：把文件路径交给常驻实例；未常驻则拉起完整应用并给启动反馈。
  *   1. 连接 \\.\pipe\mdreader（常驻的 Electron 进程在监听；服务端用 Node 内置 net，
  *      零新增依赖）
  *      成功 → 写 "<进程引导毫秒数>\n<文件路径>"（UTF-16LE）→ 退出
- *   2. 连不上（未常驻）→ 直接拉起同目录 MDReader.exe 并把文件路径透传，
- *      行为与引入启动器之前完全一致
+ *   2. 连不上（未常驻）→ 先弹一个无边框启动浮窗「MDReader 正在启动…」（随系统
+ *      明暗取色），再拉起同目录 MDReader.exe 并把文件路径透传；然后轮询管道，
+ *      应用主进程就绪（管道可连）就把路径再走管道移交一次、关浮窗退出。
+ *      路径仍透传 argv 作兑底：浮窗超时/应用异常退出都不丢文件。
+ *      启动浮窗存在的意义：MDReader.exe 映像创建前的外部扫描约 3s，这段
+ *      任何应用内代码都来不及跑 —— 只有这个 15KB 的小进程能在此期间给出视觉反馈。
+ *      全局互斥体 Local\MDReaderSplash 防止连续双击时叠出多个浮窗。
  *
  * 路径按 UTF-16LE 原样传出，宿主侧用 Buffer.toString("utf16le") 解，
  * 不经任何代码页转换（这是相对 "cmd 重定向" 方案的关键优势：无 GBK 坑、
@@ -24,6 +29,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <winreg.h>
 
 #define PIPE_NAME L"\\\\.\\pipe\\mdreader"
 #define APP_EXE L"MDReader.exe"
@@ -111,12 +117,12 @@ static BOOL SendToResident(const wchar_t *path)
     return TRUE;
 }
 
-/* 未常驻：直接拉起完整应用（与引入启动器之前的行为一致） */
-static void ColdStart(const wchar_t *exe, const wchar_t *path)
+/* 未常驻：直接拉起完整应用（与引入启动器之前的行为一致）。
+ * 返回 TRUE 时 pi 中是子进程句柄（调用方用于等待/轮询），用完必须 CloseHandle。 */
+static BOOL ColdStart(const wchar_t *exe, const wchar_t *path, PROCESS_INFORMATION *pi)
 {
     static wchar_t cmd[BUF_CHARS];
     STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
     int i = 0;
 
     cmd[i++] = L'"';
@@ -132,10 +138,148 @@ static void ColdStart(const wchar_t *exe, const wchar_t *path)
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    ZeroMemory(pi, sizeof(*pi));
+    return CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, pi);
+}
+
+/* ---------- 启动等待浮窗 ----------
+ * 冷启动时 MDReader.exe 从被创建到主进程就绪有数秒空窗（外部扫描 + Electron 引导），
+ * 期间用户没有任何视觉反馈。这个浮窗在拉起 MDReader.exe 之前就显示，管道可连
+ * （= 应用主进程就绪）即关闭退出。仅 kernel32/user32 静态编译，不增依赖。 */
+
+#define SPLASH_W 320
+#define SPLASH_H 96
+#define SPLASH_TIMEOUT_MS 20000
+
+/* 高 DPI：物理像素坐标 + 按系统 DPI 缩放窗口与字号（文字不发虚） */
+static int g_dpi = 96;
+static int Dpi(int v) { return v * g_dpi / 96; }
+
+static HWND g_splash = NULL;
+static HFONT g_font = NULL;
+static COLORREF g_bg, g_fg;
+
+/* 读系统「应用模式」明暗（与 MDReader 的跟随系统主题同源），读不到按浅色 */
+static BOOL IsDarkMode(void)
+{
+    DWORD v = 1, cb = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &v, &cb)
+        != ERROR_SUCCESS) {
+        return FALSE;
+    }
+    return v == 0;
+}
+
+static LRESULT CALLBACK SplashProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        RECT rc;
+        GetClientRect(h, &rc);
+        HBRUSH brush = CreateSolidBrush(g_bg);
+        FillRect(dc, &rc, brush);
+        DeleteObject(brush);
+        HGDIOBJ old = SelectObject(dc, g_font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, g_fg);
+        RECT textRc = rc;
+        textRc.bottom -= Dpi(SPLASH_H) / 3; /* 文字略偏上，下方留白像标题栏高度 */
+        DrawTextW(dc, L"MDReader 正在启动…", -1, &textRc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(dc, old);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        return 0;
+    default:
+        return DefWindowProcW(h, msg, wp, lp);
+    }
+}
+
+static HWND CreateSplash(HINSTANCE hInst)
+{
+    WNDCLASSW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = SplashProc;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_APPSTARTING);
+    wc.lpszClassName = L"MDReaderSplash";
+    if (!RegisterClassW(&wc)) return NULL;
+
+    g_dpi = GetDpiForSystem();
+    const int w = Dpi(SPLASH_W), hgt = Dpi(SPLASH_H);
+
+    if (IsDarkMode()) {
+        g_bg = RGB(0x0d, 0x11, 0x17); /* 与主题暗色背景一致 */
+        g_fg = RGB(0xe6, 0xed, 0xf3);
+    } else {
+        g_bg = RGB(0xfa, 0xfa, 0xfa); /* 与主题亮色背景一致 */
+        g_fg = RGB(0x1f, 0x23, 0x28);
+    }
+    g_font = CreateFontW(-Dpi(15), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                         DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+
+    int sw = GetSystemMetrics(SM_CXSCREEN);
+    int sh = GetSystemMetrics(SM_CYSCREEN);
+    /* 窗口标题仅用于自动化定位（WS_POPUP 无标题栏，用户不可见） */
+    HWND h = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName,
+                             L"MDReader Splash", WS_POPUP, (sw - w) / 2,
+                             (sh - hgt) / 2, w, hgt, NULL, NULL,
+                             hInst, NULL);
+    if (!h) return NULL;
+    ShowWindow(h, SW_SHOWNA);
+    UpdateWindow(h); /* 立即触发 WM_PAINT，不等消息循环 */
+    return h;
+}
+
+static void PumpMessages(void)
+{
+    MSG m;
+    while (PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+/* 冷启动等待：拉起 MDReader.exe 后轮询管道，主进程就绪即移交路径并结束；
+ * 子进程退出（异常）或超时也结束（路径已在 argv 里，应用自身仍会打开）。 */
+static void ColdStartAndWait(HINSTANCE hInst, const wchar_t *exe, const wchar_t *path)
+{
+    /* 防叠窗：已有另一个启动器浮窗在等，就不再画自己的 */
+    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\MDReaderSplash");
+    BOOL splashAllowed = mutex && GetLastError() != ERROR_ALREADY_EXISTS;
+    if (splashAllowed) g_splash = CreateSplash(hInst);
+
+    PROCESS_INFORMATION pi;
+    if (ColdStart(exe, path, &pi)) {
+        DWORD start = GetTickCount();
+        BOOL done = FALSE;
+        while (!done) {
+            PumpMessages(); /* 浮窗保持可绘制/可响应 */
+            if (SendToResident(path)) { /* 管道可连 = 主进程就绪，移交后收工 */
+                done = TRUE;
+                break;
+            }
+            if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) break;
+            if (GetTickCount() - start > SPLASH_TIMEOUT_MS) break;
+        }
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
+    }
+
+    PumpMessages();
+    if (g_splash) DestroyWindow(g_splash);
+    PumpMessages();
+    if (g_font) DeleteObject(g_font);
+    if (mutex) {
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
     }
 }
 
@@ -144,10 +288,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmdLine, int nShowC
     static wchar_t dir[MAX_PATH], exe[MAX_PATH], arg[MAX_PATH];
     const wchar_t *p;
 
-    (void)hInst;
     (void)hPrev;
     (void)lpCmdLine;
     (void)nShowCmd;
+
+    /* 先声明 DPI 感知再建窗口：GetDpiForSystem 才返回真实 DPI，文字按物理像素绘制不发虚 */
+    SetProcessDPIAware();
 
     ResolveAppPaths(dir, exe);
 
@@ -160,9 +306,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmdLine, int nShowC
         arg[i] = 0;
     }
 
-    /* 带路径时交给常驻实例打开；不带路径（裸跑）时只唤出窗口 */
+    /* 带路径时交给常驻实例打开；不带路径（裸跑）时只唤出窗口。
+     * 常驻移交失败 = 未常驻 → 冷启动 + 启动浮窗 + 管道轮询。 */
     if (!SendToResident(arg[0] ? arg : NULL)) {
-        ColdStart(exe, arg[0] ? arg : NULL);
+        ColdStartAndWait(hInst, exe, arg[0] ? arg : NULL);
     }
     return 0;
 }
