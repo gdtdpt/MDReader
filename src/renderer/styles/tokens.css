@@ -1,0 +1,122 @@
+/* MDReader tokens.css — 设计令牌层
+ *
+ * 本文件只有两类内容，不含任何选择器级排版规则：
+ *   1. CSS 自定义属性（亮 / 暗两套，靠 data-theme 切换）
+ *   2. 全局重置（box-sizing / 选区 / [hidden] / html,body 基础样式）
+ *
+ * 消费方：屏幕阅读、导出 PDF、导出 HTML 单文件 —— 三处共用同一份。
+ * 恒亮色约定：导出容器不设 data-theme，:root 默认值即亮色，不需要任何覆盖代码。 */
+
+:root {
+  --bg: #fafafa;
+  --content-bg: #ffffff;
+  --text: #24292f;
+  --text-muted: #6e7781;
+  --border: #d8dee4;
+  --code-bg: #f6f8fa;
+  --inline-code-fg: #953800;
+  --accent: #0969da;
+  --blockquote-fg: #57606a;
+
+  --hover-bg: rgba(0, 0, 0, 0.06);
+  --hover-active: rgba(0, 0, 0, 0.1);
+  --error-border: #f0c6c6;
+  --error-bg: #fff1f1;
+  --error-fg: #a32d2d;
+  --scrollbar-thumb: #c8ccd0;
+  --scrollbar-thumb-hover: #a9adb1;
+  --mermaid-error-fg: #a04141;
+  --selection-bg: rgba(9, 105, 218, 0.22);
+
+  /* 代码高亮令牌（GitHub Light）——供 content.css 的 .hljs-* 规则引用，
+     本层是代码配色唯一来源，正文层不出现硬编码色值 */
+  --hl-comment: #6a737d;
+  --hl-keyword: #d73a49;
+  --hl-string: #032f62;
+  --hl-number: #005cc5;
+  --hl-title: #6f42c1;
+  --hl-attr: #e36209;
+  --hl-meta: #6a737d;
+  --hl-deletion-fg: #b31d28;
+  --hl-deletion-bg: #ffeef0;
+  --hl-addition-fg: #22863a;
+  --hl-addition-bg: #f0fff4;
+
+  --font-sans: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC",
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: Consolas, "Cascadia Mono", "Courier New", monospace;
+
+  /* 版心基准宽（缩放系数 1 时的 A4 观感）。
+     实际版心 = min(基准 × 缩放系数, 可用空间)——见 .markdown-body */
+  --content-max: 820px;
+  /* 字号/版心缩放系数，由 viewer.js 的 applyFontFactor() 写入；此处为 CSS 兜底初值 */
+  --font-factor: 1;
+}
+
+/* ---------- 暗色主题（GitHub Dark 风格，M2-5） ---------- */
+
+:root[data-theme="dark"] {
+  --bg: #161b22;
+  --content-bg: #0d1117;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --border: #30363d;
+  --code-bg: #161b22;
+  --inline-code-fg: #f0883e;
+  --accent: #58a6ff;
+  --blockquote-fg: #8b949e;
+
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --hover-active: rgba(255, 255, 255, 0.12);
+  --error-border: #8b3a3a;
+  --error-bg: #2d1517;
+  --error-fg: #ff7b72;
+  --scrollbar-thumb: #444d56;
+  --scrollbar-thumb-hover: #57606a;
+  --mermaid-error-fg: #ff7b72;
+  --selection-bg: rgba(88, 166, 255, 0.35);
+
+  /* 代码高亮令牌（GitHub Dark） */
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-number: #79c0ff;
+  --hl-title: #d2a8ff;
+  --hl-attr: #ffa657;
+  --hl-meta: #8b949e;
+  --hl-deletion-fg: #ff7b72;
+  --hl-deletion-bg: rgba(248, 81, 73, 0.15);
+  --hl-addition-fg: #7ee787;
+  --hl-addition-bg: rgba(46, 160, 67, 0.15);
+
+  color-scheme: dark; /* 原生滚动条/表单控件跟随暗色 */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: var(--selection-bg);
+}
+
+/* hidden 属性优先级最高，防止被 display:flex 等规则覆盖 */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}

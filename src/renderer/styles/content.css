@@ -1,0 +1,288 @@
+/* MDReader content.css — 正文排版层（单一来源）
+ *
+ * 这里的规则是正文排版的唯一来源：屏幕阅读、导出 PDF、导出 HTML 单文件
+ * 三者共用同一份文件，不允许在别处复制或改写这些规则。
+ *
+ * 硬约束：
+ *   - 颜色一律走 tokens.css 的变量，本文件不出现任何硬编码色值
+ *   - 介质差异（分页、裁切、纸宽）写在 content-print.css，不写在这里
+ */
+
+/* ---------- 正文（Typora 风格排版） ---------- */
+
+.markdown-body {
+  /* 版心随缩放系数整体放大（宽度和字号等比，每行字数不变），
+     以容器可用宽度封顶——顶满后再放大只涨字号（重新折行）。
+     100% 同时兜住了窄窗口：系数 1 时若窗口不足 820px 也不再出现横向滚动 */
+  max-width: min(calc(var(--content-max) * var(--font-factor)), 100%);
+  margin: 0 auto;
+  /* 内边距用 em（基准 16px 时 = 48px 40px 96px），与字号等比缩放，
+     保证任何缩放系数下文字列宽恒为 46.25em——「整体放大」而不是只放大字号 */
+  padding: 3em 2.5em 6em;
+  background: var(--content-bg);
+  font-size: var(--content-zoom, 16px); /* 工具栏字号缩放（多 tab 全局生效） */
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.2em 0 0.6em;
+}
+
+.markdown-body h1 {
+  font-size: 1.9em;
+  margin-top: 0.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-body h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+
+.markdown-body h4 {
+  font-size: 1.05em;
+}
+
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 1em;
+}
+
+.markdown-body h6 {
+  color: var(--text-muted);
+}
+
+.markdown-body p {
+  margin: 0.8em 0;
+}
+
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.1em 1em;
+  border-left: 4px solid var(--border);
+  color: var(--blockquote-fg);
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+  margin: 0.6em 0;
+}
+
+.markdown-body li {
+  margin: 0.25em 0;
+}
+
+/* 任务列表：复选框取代项目符号（markdown-it-task-lists） */
+.markdown-body li.task-list-item {
+  list-style: none;
+}
+
+.markdown-body li.task-list-item .task-list-item-checkbox {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* 行内代码 */
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--inline-code-fg);
+}
+
+/* 代码块 */
+.markdown-body pre {
+  margin: 0.8em 0;
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+  color: var(--text);
+  font-size: 0.875em;
+  line-height: 1.5;
+}
+
+/* ---------- Mermaid 图块（M2-4） ---------- */
+
+/* 渲染前：占位容器先按代码块风格显示源码，库加载后由 mermaid 替换为图形 */
+.markdown-body .mermaid-block {
+  margin: 0.8em 0;
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.markdown-body .mermaid-block[data-mermaid="pending"]::before {
+  content: "mermaid 图形加载中…";
+  display: block;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  margin-bottom: 6px;
+}
+
+/* 渲染失败 / 库缺失：保留源码并提示 */
+.markdown-body .mermaid-block.mermaid-error {
+  color: var(--mermaid-error-fg);
+}
+
+.markdown-body .mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  display: block;
+  background: none;
+  border: none;
+}
+
+
+/* ---------- 代码高亮（highlight.js 类名） ----------
+ * 配色全部走 tokens.css 的 --hl-* 令牌，明暗差异只发生在变量层，
+ * 因此同一份规则可同时服务屏幕（跟随 data-theme）与导出（恒亮色）。 */
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-formula {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: var(--hl-number);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-title.class_,
+.hljs-title.function_ {
+  color: var(--hl-title);
+}
+
+.hljs-attr,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-built_in,
+.hljs-name {
+  color: var(--hl-attr);
+}
+
+.hljs-meta {
+  color: var(--hl-meta);
+}
+
+.hljs-deletion {
+  color: var(--hl-deletion-fg);
+  background: var(--hl-deletion-bg);
+}
+
+.hljs-addition {
+  color: var(--hl-addition-fg);
+  background: var(--hl-addition-bg);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* 表格 */
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+}
+
+.markdown-body th {
+  background: var(--code-bg);
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+}
+
+.markdown-body tr:nth-child(2n) td {
+  background: var(--bg);
+}
+
+/* 分隔线与图片 */
+.markdown-body hr {
+  border: none;
+  border-top: 2px solid var(--border);
+  margin: 1.6em 0;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* KaTeX 块级公式：长公式横向滚动，不撑破版心 */
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}

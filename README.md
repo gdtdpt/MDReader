@@ -110,7 +110,8 @@ src/main/app.js          主进程：窗口生命周期、托盘、菜单与加�
 src/preload/api.js       仅暴露最小 window.api（contextBridge）
 src/renderer/            渲染层：标题栏/工具栏/标签页/大纲/查找栏/模态框 + 主题
   ├─ index.html          界面骨架
-  ├─ theme.css           设计令牌（CSS 变量 + data-theme 明暗两套）
+  ├─ styles/             样式三层：tokens（令牌+重置）/ content（正文排版，
+  │                      屏幕与导出共用）/ shell（外壳，仅屏幕）
   ├─ theme-init.js       样式应用前预置主题，避免暗色用户启动白闪
   └─ viewer.js           解析渲染、标签页与 LRU、会话、变更检测、查找
 native/launcher/         C 源码 + 编译产物（随包分发）

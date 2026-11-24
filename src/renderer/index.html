@@ -7,7 +7,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MDReader</title>
   <script src="theme-init.js"></script>
-  <link rel="stylesheet" href="theme.css" />
+  <!-- 样式三层（导出 PDF / HTML 复用同样的文件，正文排版只有 content.css 一份）：
+       tokens  = 设计令牌 + 全局重置
+       content = 正文排版（屏幕与导出共用）
+       shell   = 外壳，仅屏幕 -->
+  <link rel="stylesheet" href="styles/tokens.css" />
+  <link rel="stylesheet" href="styles/content.css" />
+  <link rel="stylesheet" href="styles/shell.css" />
   <!-- KaTeX 样式只在正文含公式时才被用到，放首屏阻塞链路里会拖慢首次绘制 -->
 </head>
 <body>
