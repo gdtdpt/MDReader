@@ -1458,6 +1458,13 @@
       "--content-zoom",
       16 * fontFactor + "px"
     );
+    // 版心宽度与字号等比联动（见 .markdown-body 的 max-width）：
+    // 空间足够时整体放大，顶满可用宽度后只涨字号。宽度上限由 CSS 的 100% 兜底，
+    // 因此窗口缩放、大纲开合都不需要这里重新计算。
+    document.documentElement.style.setProperty(
+      "--font-factor",
+      String(fontFactor)
+    );
     // 缩放未偏离原值时，重置按钮无意义 → 禁用
     tbZoomReset.disabled = fontFactor === 1;
     try {

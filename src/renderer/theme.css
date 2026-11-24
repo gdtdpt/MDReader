@@ -26,7 +26,11 @@
     "Helvetica Neue", Arial, sans-serif;
   --font-mono: Consolas, "Cascadia Mono", "Courier New", monospace;
 
+  /* 版心基准宽（缩放系数 1 时的 A4 观感）。
+     实际版心 = min(基准 × 缩放系数, 可用空间)——见 .markdown-body */
   --content-max: 820px;
+  /* 字号/版心缩放系数，由 viewer.js 的 applyFontFactor() 写入；此处为 CSS 兜底初值 */
+  --font-factor: 1;
 }
 
 /* ---------- 暗色主题（GitHub Dark 风格，M2-5） ---------- */
@@ -280,7 +284,8 @@ body {
   justify-content: space-between;
   gap: 12px;
   margin: 12px auto;
-  max-width: var(--content-max);
+  /* 与正文版心同宽（含缩放联动），保持对齐 */
+  max-width: min(calc(var(--content-max) * var(--font-factor)), 100%);
   padding: 8px 14px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -690,9 +695,14 @@ body {
 /* ---------- 正文（Typora 风格排版） ---------- */
 
 .markdown-body {
-  max-width: var(--content-max);
+  /* 版心随缩放系数整体放大（宽度和字号等比，每行字数不变），
+     以容器可用宽度封顶——顶满后再放大只涨字号（重新折行）。
+     100% 同时兜住了窄窗口：系数 1 时若窗口不足 820px 也不再出现横向滚动 */
+  max-width: min(calc(var(--content-max) * var(--font-factor)), 100%);
   margin: 0 auto;
-  padding: 48px 40px 96px;
+  /* 内边距用 em（基准 16px 时 = 48px 40px 96px），与字号等比缩放，
+     保证任何缩放系数下文字列宽恒为 46.25em——「整体放大」而不是只放大字号 */
+  padding: 3em 2.5em 6em;
   background: var(--content-bg);
   font-size: var(--content-zoom, 16px); /* 工具栏字号缩放（多 tab 全局生效） */
   line-height: 1.7;
