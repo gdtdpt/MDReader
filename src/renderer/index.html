@@ -147,9 +147,10 @@
     </div>
   </div>
 
-  <!-- 启动仅同步加载必需库（M4 启动优化：highlight/KaTeX/task 由 viewer.js 首绘后懒加载） -->
-  <script src="../../vendor/markdown-it.min.js"></script>
-  <script src="../../vendor/purify.min.js"></script>
-  <script src="viewer.js"></script>
+  <!-- 启动仅同步加载必需库（M4 启动优化：highlight/KaTeX/task 由 viewer.js 首绘后懒加载）
+       defer：不阻塞首绘（标题栏/工具栏外壳先画出来），执行顺序仍与同步一致 -->
+  <script defer src="../../vendor/markdown-it.min.js"></script>
+  <script defer src="../../vendor/purify.min.js"></script>
+  <script defer src="viewer.js"></script>
 </body>
 </html>

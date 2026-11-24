@@ -582,10 +582,12 @@ function createWindow() {
     minHeight: 420,
     // Typora 风格：无边框 + 自绘标题栏/工具栏
     frame: false,
-    // 预设背景色配合 ready-to-show 防白闪；按当前系统明暗取色，
-    // 窗口显示后渲染层会用 localStorage 里的偏好立即校正
+    // 窗口创建即显示（Typora 同款策略）：背景色按当前系统明暗预设，不白闪；
+    // 正文外壳（标题栏/工具栏）由渲染层随后绘出，不等 ready-to-show。
+    // 此前等 ready-to-show 才显窗，冷启动下用户有数秒看不到任何窗口，
+    // 性能差的机器上会被误认为没响应。
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0d1117" : "#fafafa",
-    show: false,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "preload", "api.js"),
       contextIsolation: true,
@@ -593,10 +595,6 @@ function createWindow() {
       sandbox: true,
       spellcheck: false,
     },
-  });
-
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
   });
 
   // 原生菜单彻底隐藏（操作走自绘工具栏）；菜单加速键仍全局生效
