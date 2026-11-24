@@ -864,6 +864,30 @@ function registerIpc() {
       return { ok: false, error: err && err.message ? err.message : String(err) };
     }
   });
+
+  ipcMain.handle("export:html", async (_event, payload) => {
+    try {
+      let target = payload && payload.outPath;
+      if (!target) {
+        const dlg = await dialog.showSaveDialog(mainWindow, {
+          title: "导出为 HTML",
+          defaultPath: (payload && payload.defaultPath) || "导出.html",
+          filters: [{ name: "HTML 文档", extensions: ["html"] }],
+        });
+        if (dlg.canceled || !dlg.filePath) return { ok: false, canceled: true };
+        target = dlg.filePath;
+      }
+      const html = buildStandaloneHtml(
+        inlineExportImages(String(payload.html || "")),
+        String(payload.title || "MDReader")
+      );
+      // BOM：老版记事本等编辑器对无 BOM 的 UTF-8 可能误判编码
+      await fsp.writeFile(target, "\ufeff" + html, "utf8");
+      return { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+  });
 }
 
 /* ---------- 导出 PDF（M5 批次 2） ----------
@@ -918,8 +942,8 @@ const EXPORT_IMG_MIME = {
 
 const EXPORT_IMG_SRC_RE = /(<img\b[^>]*?\bsrc=")file:\/\/\/([^"]*?)(")/g;
 
-/* 正文里的相对图片在渲染期已被改写成 file:/// 绝对路径；PDF 内嵌需要转 data:。
- * 读取失败（文件被移动等）保留原引用，让导出继续而不中断。 */
+/* 正文里的相对图片在渲染期已被改写成 file:/// 绝对路径；导出（PDF/HTML）
+ * 需要转 data: 内嵌。读取失败（文件被移动等）保留原引用，让导出继续而不中断。 */
 function inlineExportImages(html) {
   return html.replace(EXPORT_IMG_SRC_RE, (m, head, urlPath, tail) => {
     try {
@@ -931,6 +955,53 @@ function inlineExportImages(html) {
       return m;
     }
   });
+}
+
+let katexCssEmbedCache = null;
+
+/* KaTeX 样式（HTML 单文件版）：字体以内嵌 data URI 打包进文件本体。
+ * 只保留 woff2（现代浏览器通吃），woff/ttf 回退项删掉，避免三份格式重复内嵌 */
+function katexCssEmbedded() {
+  if (katexCssEmbedCache === null) {
+    const dir = path.join(__dirname, "..", "..", "vendor", "katex");
+    katexCssEmbedCache = fs
+      .readFileSync(path.join(dir, "katex.min.css"), "utf8")
+      .replace(
+        /,url\(fonts\/[^)]+\.woff\) format\("woff"\),url\(fonts\/[^)]+\.ttf\) format\("truetype"\)/g,
+        ""
+      )
+      .replace(/url\((['"]?)fonts\/([^'")]+\.woff2)\1\)/g, (m, q, file) => {
+        const data = fs.readFileSync(path.join(dir, "fonts", file)).toString("base64");
+        return "url(data:font/woff2;base64," + data + ")";
+      });
+  }
+  return katexCssEmbedCache;
+}
+
+/* HTML 单文件：正文 + 全内联样式自包含，无脚本——mermaid 渲染期已定格为
+ * 静态 SVG，图片转 data:，KaTeX 字体内嵌。恒亮色与固定 16px 基准同 PDF：
+ * 容器不设 data-theme（tokens 无 prefers-color-scheme，不会跟随系统），
+ * --font-factor 取 :root 默认值 1 */
+function buildStandaloneHtml(bodyHtml, title) {
+  const read = (p) => fs.readFileSync(p, "utf8");
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtmlText(title)}</title>
+<style>
+${katexCssEmbedded()}
+${read(path.join(__dirname, "..", "renderer", "styles", "tokens.css"))}
+${read(path.join(__dirname, "..", "renderer", "styles", "content.css"))}
+</style>
+</head>
+<body>
+<div class="markdown-body">
+${bodyHtml}
+</div>
+</body>
+</html>`;
 }
 
 function buildPrintHtml(bodyHtml, title) {

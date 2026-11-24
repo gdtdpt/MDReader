@@ -1173,6 +1173,25 @@
     else showNotice("导出失败：" + (res.error || "未知错误"), false);
   });
 
+  /* 导出 HTML 单文件：同样只交内容，样式内联与图片/字体打包由主进程完成 */
+  document.getElementById("menu-export-html").addEventListener("click", async () => {
+    hideMoreMenu();
+    const tab = getActiveTab();
+    if (!tab || !tab.path || tab.display !== "dom" || !tab.pane) {
+      showNotice("当前没有可导出的文档", false);
+      return;
+    }
+    showNotice("正在导出 HTML…", true);
+    const res = await window.api.exportHtml({
+      html: tab.pane.innerHTML,
+      title: basename(tab.path),
+      defaultPath: tab.path.replace(/\.[^.]+$/, "") + ".html",
+    });
+    if (res.ok) showNotice("已导出：" + res.path, true);
+    else if (res.canceled) showNotice("已取消导出", true);
+    else showNotice("导出失败：" + (res.error || "未知错误"), false);
+  });
+
   document.getElementById("menu-default-opener").addEventListener("click", async () => {
     hideMoreMenu();
     // 先查关联：有冲突才弹自绘确认框（应用内风格），无冲突直接写

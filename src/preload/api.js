@@ -117,6 +117,10 @@ contextBridge.exposeInMainWorld("api", {
     return ipcRenderer.invoke("export:pdf", payload);
   },
 
+  exportHtml(payload) {
+    return ipcRenderer.invoke("export:html", payload);
+  },
+
   /**
    * 查询关闭窗口行为（"ask" 每次询问 / "tray" 最小化到托盘 / "quit" 完全退出）。
    * @returns {Promise<"ask"|"tray"|"quit">}
