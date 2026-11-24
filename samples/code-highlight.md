@@ -49,8 +49,8 @@ def quicksort(arr):
 
 ```yaml
 targets:
-  - win10-1709-x64
-  - offline-intranet
+  - win10-x64
+  - offline
 ```
 
 ## Diff

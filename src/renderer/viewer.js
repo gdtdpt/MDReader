@@ -55,7 +55,7 @@
   }
 
   /* ---------- markdown-it 实例工厂（M4 启动优化重构） ----------
-   * 启动只同步加载 markdown-it + DOMPurify（目标机实测 vendor 同步加载占 4.3s/4.8s），
+   * 启动只同步加载 markdown-it + DOMPurify（实测 vendor 同步加载占 4.3s/4.8s），
    * highlight/KaTeX/task-lists 由首绘后的 loadDeferredVendor() 异步加载，
    * 到位后重建实例并重渲染（规则挂载全部收进工厂，重建即完整管线）。
    * 高亮回调运行时读 window.hljs_bundle，缺库自然走默认转义降级。
@@ -173,7 +173,7 @@
       mermaid.initialize({
         startOnLoad: false,
         theme: document.documentElement.dataset.theme === "dark" ? "dark" : "neutral",
-        securityLevel: "strict", // 图内禁外链/交互，内网阅读器安全基线
+        securityLevel: "strict", // 图内禁外链/交互，阅读器安全基线
         fontFamily: getComputedStyle(document.body).fontFamily,
       });
       blocks.forEach((el) => el.removeAttribute("data-mermaid"));
@@ -301,7 +301,7 @@
     });
   }
 
-  /* 外链点击是「复制链接」而不是「打开」（内网脱机环境打不开），
+  /* 外链点击是「复制链接」而不是「打开」（离线环境打不开），
    * 悬停提示让这个非默认行为可被发现；作者自己写了 title 的不覆盖。
    * 本地链接不标记：它们在应用内打开，符合直觉。 */
   function markExternalLinks(rootEl) {
@@ -456,7 +456,7 @@
     const existing = tabs.find((t) => t.path.toLowerCase() === key);
     if (existing) {
       /* 重复打开（双击关联 / 最近文件 / 拖拽）：mtime+size 未变时只聚焦，
-       * 跳过整篇重解析与重渲染 —— 目标机实测这一步 200~470ms，在快速启动器
+       * 跳过整篇重解析与重渲染 —— 实测这一步 200~470ms，在快速启动器
        * 已经打掉外部常数之后，它已是双击延迟的主要剩余成本。
        * 判定口径与外部修改检测（checkExternalChange）一致：内容真的变了才重渲染。 */
       const unchanged =
@@ -888,7 +888,7 @@
 
   /* ---------- 快速启动器（M4-2）
    * 把 .md 关联指向 ~15KB 的原生启动器：双击时不再创建 150MB 的 MDReader.exe，
-   * 而是由小进程把文件路径经命名管道交给常驻实例（目标机实测外部开销与映像体积
+   * 而是由小进程把文件路径经命名管道交给常驻实例（实测外部开销与映像体积
    * 正相关：150MB ≈ 3s，200KB ≈ 1.5s）。产物不在位（开发期）时整项隐藏。
    */
   let fastLauncher = { on: false, available: false };
@@ -1243,7 +1243,7 @@
   /* ---------- 文档内查找（M3-5） ----------
    * CSS Custom Highlight API 高亮：Range 集合直接上色，
    * 不改 DOM、不与 mermaid/KaTeX 的结构冲突。
-   * 快捷键（vim 方案，Heinrich 确认）：Ctrl+N 下一个 / Ctrl+P 上一个 / Esc 关闭。
+   * 快捷键（vim 方案）：Ctrl+N 下一个 / Ctrl+P 上一个 / Esc 关闭。
    */
 
   const highlightSupported =
@@ -1588,7 +1588,7 @@
   });
 
   /* ---------- vendor 懒加载（M4 启动优化） ----------
-   * 目标机实测：5 个 vendor 同步脚本加载占首屏 4.3s/4.8s（磁盘/杀软/CPU 稳态成本）。
+   * 实测：5 个 vendor 同步脚本加载占首屏 4.3s/4.8s（磁盘/CPU 稳态成本）。
    * 首绘后异步补齐其余三个库，全部到位后重建 markdown-it 实例并重渲染，
    * 滚动位置由 activateTab 恢复；单个脚本失败不阻塞其余（缺库功能降级，与原行为一致）。
    */

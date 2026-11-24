@@ -22,7 +22,6 @@ const OUT = path.join(ROOT, "native", "launcher", "MDReaderLauncher.exe");
 const CANDIDATES = [
   process.env.MDREADER_CC,
   "gcc",
-  "C:\\Users\\richard\\AppData\\Local\\Qt\\Tools\\mingw1120_64\\bin\\gcc.exe",
   "C:\\mingw64\\bin\\gcc.exe",
   "C:\\MinGW\\bin\\gcc.exe",
 ].filter(Boolean);

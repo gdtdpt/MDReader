@@ -1,7 +1,7 @@
-/* MDReader 启动器（M4-2，Heinrich 确认方案）
+/* MDReader 启动器（M4-2）
  *
- * 存在意义：双击 .md 时，Windows 必然会创建一个进程。目标机实测表明，
- * "进程创建前的外部开销"（企业 EDR 同步扫描映像）与映像体积正相关：
+ * 存在意义：双击 .md 时，Windows 必然会创建一个进程。实测表明，
+ * "进程创建前的外部开销"（安全软件同步扫描映像）与映像体积正相关：
  *   MDReader.exe    150.3 MB  → 约 3.0~3.3 s
  *   对照小 exe       200 KB   → 约 1.5 s
  * 所以这里刻意把映像做到约 15 KB（gcc -Os -s -static），把这一笔压到最小。
@@ -19,7 +19,7 @@
  *
  * 编译：node tools/build-launcher.js
  * 产物 native/launcher/MDReaderLauncher.exe 入库并随 dist 分发（打包机无需编译器）。
- * 依赖：仅 kernel32 / msvcrt / user32，Win10 1709 自带，运行时零安装。
+ * 依赖：仅 kernel32 / msvcrt / user32，Win10 自带，运行时零安装。
  */
 
 #define WIN32_LEAN_AND_MEAN

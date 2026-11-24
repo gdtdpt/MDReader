@@ -26,7 +26,7 @@
 
 ![missing](./img/missing.png)
 
-6. 远程图片 `https://...`（CSP 拦截，内网脱机预期行为）：
+6. 远程图片 `https://...`（CSP 拦截，离线环境预期行为）：
 
 ![remote](https://example.com/remote.png)
 
